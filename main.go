@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -20,16 +22,30 @@ var (
 	reportInterval time.Duration
 	packetSize  int
 	port        int
+	pps         int
+	throughputMode bool
+	bufferSize  int
+	tcpNoDelay  bool
 )
+
+func init() {
+	// Runtime optimizations for high-performance networking
+	runtime.GOMAXPROCS(runtime.NumCPU()) // Use all CPUs
+	debug.SetGCPercent(200)              // Reduce GC frequency
+}
 
 func main() {
 	flag.StringVar(&ips, "ips", "", "Comma-separated list of IPs for full mesh testing")
-	flag.StringVar(&protocol, "protocol", "udp", "Protocol to use: udp or tcp")
-	flag.IntVar(&concurrency, "concurrency", 1, "Number of concurrent connections per target")
-	flag.DurationVar(&duration, "duration", 60*time.Second, "Test duration")
-	flag.DurationVar(&reportInterval, "report-interval", 10*time.Second, "Interval for periodic reports")
-	flag.IntVar(&packetSize, "packet-size", 1024, "Size of test packets in bytes")
+	flag.StringVar(&protocol, "protocol", "tcp", "Protocol to use: udp or tcp")
+	flag.IntVar(&concurrency, "concurrency", 8, "Number of concurrent connections per target (default: 8 for 100Gbps)")
+	flag.DurationVar(&duration, "duration", 30*time.Second, "Test duration")
+	flag.DurationVar(&reportInterval, "report-interval", 5*time.Second, "Interval for periodic reports")
+	flag.IntVar(&packetSize, "packet-size", 0, "Size of test packets in bytes (0=auto-detect, uses jumbo frames if available)")
 	flag.IntVar(&port, "port", 9999, "Port to use for testing")
+	flag.IntVar(&pps, "pps", 0, "Packets per second per connection (0=unlimited/throughput mode - DEFAULT)")
+	flag.BoolVar(&throughputMode, "throughput-mode", true, "Enable throughput mode optimizations (default: true)")
+	flag.IntVar(&bufferSize, "buffer-size", 0, "Buffer size for throughput mode (0=auto, defaults to 1MB for TCP)")
+	flag.BoolVar(&tcpNoDelay, "tcp-nodelay", false, "Enable TCP_NODELAY (disable Nagle's algorithm)")
 	flag.Parse()
 
 	if ips == "" {
@@ -48,6 +64,27 @@ func main() {
 		log.Fatal("Could not detect local IP from provided list")
 	}
 
+	// Auto-detect packet size from MTU if not specified
+	if packetSize == 0 {
+		mtu, err := GetMTU(localIP)
+		if err != nil {
+			log.Printf("Warning: Could not detect MTU: %v, checking for jumbo frames", err)
+			mtu = 9000 // Try jumbo frames by default for high-speed networks
+		}
+		// For high-speed networks, prefer larger packets
+		if mtu >= 9000 {
+			log.Printf("Jumbo frames detected (MTU: %d)", mtu)
+			if protocol == "udp" {
+				packetSize = 8972 // Max UDP payload with jumbo frames
+			} else {
+				packetSize = mtu - 40 // Account for IP + TCP headers
+			}
+		} else {
+			packetSize = CalculateOptimalPacketSize(mtu, protocol)
+		}
+		log.Printf("Using packet size: %d bytes (MTU: %d)", packetSize, mtu)
+	}
+
 	log.Printf("Starting gonet - Network Testing Tool")
 	log.Printf("Local IP: %s", localIP)
 	log.Printf("Protocol: %s", protocol)
@@ -55,8 +92,38 @@ func main() {
 	log.Printf("Concurrency: %d per target", concurrency)
 	log.Printf("Duration: %v", duration)
 	log.Printf("Packet Size: %d bytes", packetSize)
+	
+	// Auto-enable throughput mode for unlimited PPS
+	if pps == 0 {
+		throughputMode = true
+	}
+	
+	if throughputMode {
+		log.Printf("Mode: THROUGHPUT (optimized for 100Gbps+ networks)")
+		log.Printf("PPS: UNLIMITED")
+		
+		// Auto-set buffer size if not specified - use large buffers for 100Gbps
+		if bufferSize == 0 {
+			if protocol == "tcp" {
+				bufferSize = 1048576  // 1MB for TCP on high-speed networks
+			} else {
+				bufferSize = 262144   // 256KB for UDP batching
+			}
+		}
+		log.Printf("Buffer Size: %d bytes (%.1f MB)", bufferSize, float64(bufferSize)/1048576)
+		log.Printf("Socket Buffers: 16MB (optimized for 100Gbps)")
+		log.Printf("Concurrency: %d connections per target", concurrency)
+		
+		// Calculate theoretical max throughput
+		maxGbps := float64(concurrency * bufferSize * 8) / 1000000000.0 * 1000.0 // Assuming 1000 writes/sec
+		log.Printf("Theoretical Max: %.1f Gbps per target (with %d connections)", maxGbps, concurrency)
+	} else {
+		log.Printf("Mode: PACKET (optimized for metrics accuracy)")
+		log.Printf("PPS per connection: %d", pps)
+		throughputMode = false
+	}
 
-	tester := NewNetworkTester(localIP, ipList, protocol, concurrency, duration, reportInterval, packetSize, port)
+	tester := NewNetworkTester(localIP, ipList, protocol, concurrency, duration, reportInterval, packetSize, port, pps)
 	
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)

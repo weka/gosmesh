@@ -18,6 +18,7 @@ type NetworkTester struct {
 	reportInterval time.Duration
 	packetSize     int
 	port           int
+	pps            int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -31,7 +32,7 @@ type NetworkTester struct {
 }
 
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int, 
-	duration, reportInterval time.Duration, packetSize, port int) *NetworkTester {
+	duration, reportInterval time.Duration, packetSize, port, pps int) *NetworkTester {
 	
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -44,6 +45,7 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 		reportInterval: reportInterval,
 		packetSize:     packetSize,
 		port:           port,
+		pps:            pps,
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -74,7 +76,7 @@ func (nt *NetworkTester) Start() error {
 		}
 		
 		for i := 0; i < nt.concurrency; i++ {
-			conn := NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, i)
+			conn := NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
 			nt.connections = append(nt.connections, conn)
 			
 			nt.wg.Add(1)
