@@ -3,6 +3,8 @@
 
 package main
 
+import "syscall"
+
 // Stub implementations for Darwin (macOS)
 
 type HugePageAllocator struct{}
@@ -62,5 +64,35 @@ func (c *IOUringConnection) RecvAsync(buf []byte) (chan IOResult, error) {
 }
 
 func (c *IOUringConnection) Close() error {
+	return nil
+}
+
+// Gettid returns the thread ID (stub for Darwin)
+func Gettid() int {
+	// On Darwin, use process ID as a fallback
+	return syscall.Getpid()
+}
+
+// SetCPUAffinity sets CPU affinity (stub for Darwin)
+func SetCPUAffinity(cpus []int) error {
+	// Not supported on Darwin
+	return nil
+}
+
+// EnableBusyPolling enables busy polling (stub for Darwin)
+func EnableBusyPolling(fd int, usecs int) error {
+	// Not supported on Darwin
+	return nil
+}
+
+// SetTCPCork sets TCP_CORK option (stub for Darwin)
+func SetTCPCork(fd int, enabled bool) error {
+	// Not supported on Darwin
+	return nil
+}
+
+// SetTCPQuickAck sets TCP_QUICKACK option (stub for Darwin)
+func SetTCPQuickAck(fd int, enabled bool) error {
+	// Not supported on Darwin
 	return nil
 }

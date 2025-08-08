@@ -35,6 +35,20 @@ type NetworkTester struct {
 	EnableIOUring   bool
 	EnableHugePages bool
 	EnableOffload   bool
+	
+	// Performance tuning parameters
+	BufferSize     int
+	SendBatchSize  int
+	RecvBatchSize  int
+	NumQueues      int
+	BusyPollUsecs  int
+	TCPCork        bool
+	TCPQuickAck    bool
+	TCPNoDelay     bool
+	MemArenaSize   int
+	RingSize       int
+	NumWorkers     int
+	CPUList        string
 }
 
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int, 
@@ -72,8 +86,11 @@ func (nt *NetworkTester) Start() error {
 		server.Run(nt.ctx)
 	}()
 
-	// Give server time to start
-	time.Sleep(100 * time.Millisecond)
+	// Give servers time to start on all nodes
+	// This is critical - without enough delay, clients will exhaust retries
+	// In mesh mode, ALL nodes must have their servers ready before ANY connections start
+	log.Printf("Waiting 10 seconds for all servers to start across the mesh...")
+	time.Sleep(10 * time.Second)
 
 	// Create connections to all targets (excluding self)
 	for _, targetIP := range nt.targetIPs {
@@ -83,6 +100,19 @@ func (nt *NetworkTester) Start() error {
 		
 		for i := 0; i < nt.concurrency; i++ {
 			conn := NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
+			// Apply performance tuning parameters
+			if nt.BufferSize > 0 {
+				conn.bufferSize = nt.BufferSize
+			}
+			if nt.NumWorkers > 0 {
+				conn.numWorkers = nt.NumWorkers
+			}
+			conn.sendBatchSize = nt.SendBatchSize
+			conn.recvBatchSize = nt.RecvBatchSize
+			conn.tcpCork = nt.TCPCork
+			conn.tcpQuickAck = nt.TCPQuickAck
+			conn.tcpNoDelay = nt.TCPNoDelay
+			conn.busyPollUsecs = nt.BusyPollUsecs
 			nt.connections = append(nt.connections, conn)
 			
 			nt.wg.Add(1)
@@ -217,7 +247,8 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 		}
 		
 		numConns := float64(len(target.conns))
-		avgThroughput /= numConns
+		// Total throughput is the sum of all connections, not average
+		totalThroughput := avgThroughput
 		avgRTT /= numConns
 		avgJitter /= numConns
 		lossRate := 0.0
@@ -229,7 +260,7 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 		report += fmt.Sprintf("  Total Packets: Sent=%d | Received=%d | Lost=%d\n", 
 			totalSent, totalReceived, totalLost)
 		report += fmt.Sprintf("  Loss Rate: %.2f%%\n", lossRate)
-		report += fmt.Sprintf("  Avg Throughput: %.2f Mbps\n", avgThroughput)
+		report += fmt.Sprintf("  Total Throughput: %.2f Mbps (%.2f Gbps)\n", totalThroughput, totalThroughput/1000)
 		report += fmt.Sprintf("  RTT: Min=%.2f ms | Avg=%.2f ms | Max=%.2f ms\n", 
 			minRTT, avgRTT, maxRTT)
 		report += fmt.Sprintf("  Avg Jitter: %.2f ms\n", avgJitter)

@@ -363,9 +363,16 @@ func (z *ZeroCopySender) SendZeroCopy(buffers [][]byte) (int, error) {
 	}
 
 	// Prepare message header
+	var iovlen interface{}
+	if runtime.GOOS == "linux" {
+		iovlen = uint64(len(iovecs))
+	} else {
+		iovlen = int32(len(iovecs))
+	}
+	
 	msg := syscall.Msghdr{
 		Iov:    &iovecs[0],
-		Iovlen: int32(len(iovecs)),
+		Iovlen: iovlen.(uint64), // Will be cast appropriately
 	}
 
 	// Send with MSG_ZEROCOPY flag

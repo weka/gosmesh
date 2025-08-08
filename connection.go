@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"net"
 	"sync"
@@ -20,9 +21,23 @@ var (
 		},
 	}
 	
+	mediumBufferPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 65536) // 64KB
+			return &buf
+		},
+	}
+	
 	largeBufferPool = sync.Pool{
 		New: func() interface{} {
-			buf := make([]byte, 1048576) // 1MB for high-speed networks
+			buf := make([]byte, 4194304) // 4MB for high-speed networks
+			return &buf
+		},
+	}
+	
+	jumboBufferPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 134217728) // 128MB for extreme throughput
 			return &buf
 		},
 	}
@@ -54,6 +69,14 @@ type Connection struct {
 	throughputMode bool  // New: throughput mode for max performance
 	bufferSize     int   // New: configurable buffer size
 	numWorkers     int   // New: number of parallel workers
+	
+	// Optimization parameters
+	sendBatchSize  int
+	recvBatchSize  int
+	tcpCork        bool
+	tcpQuickAck    bool
+	tcpNoDelay     bool
+	busyPollUsecs  int
 	
 	conn       net.Conn
 	tcpConn    *net.TCPConn  // New: keep TCP conn for socket options
@@ -89,11 +112,11 @@ func NewConnection(localIP, targetIP string, port int, protocol string, packetSi
 		throughputMode = true
 		// Use much larger buffers for 100Gbps networks
 		if protocol == "tcp" {
-			bufferSize = 1048576 // 1MB for TCP on high-speed networks
-			numWorkers = 4        // Use 4 parallel workers for TCP
+			bufferSize = 4194304 // 4MB for TCP on high-speed networks (increased)
+			numWorkers = 8        // Use 8 parallel workers for TCP (increased)
 		} else {
-			bufferSize = 262144  // 256KB for UDP batching
-			numWorkers = 2        // Use 2 parallel workers for UDP
+			bufferSize = 1048576  // 1MB for UDP batching (increased)
+			numWorkers = 4        // Use 4 parallel workers for UDP (increased)
 		}
 	}
 	
@@ -115,6 +138,11 @@ func NewConnection(localIP, targetIP string, port int, protocol string, packetSi
 func (c *Connection) Start(ctx context.Context) error {
 	c.startTime = time.Now()
 	
+	// Start periodic stats updater for throughput mode
+	if c.throughputMode {
+		go c.periodicStatsUpdater(ctx)
+	}
+	
 	if c.protocol == "tcp" {
 		return c.startTCP(ctx)
 	}
@@ -123,9 +151,36 @@ func (c *Connection) Start(ctx context.Context) error {
 
 func (c *Connection) startTCP(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", c.targetIP, c.port)
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	
+	// Retry connection with shorter, more aggressive retries
+	var conn net.Conn
+	var err error
+	maxRetries := 60  // Even more retries (12 seconds worth)
+	firstAttempt := true
+	for i := 0; i < maxRetries; i++ {
+		conn, err = net.DialTimeout("tcp", addr, 500*time.Millisecond)  // Even shorter timeout
+		if err == nil {
+			if !firstAttempt {
+				log.Printf("Connection %d: Connected to %s after %d retries", c.id, addr, i)
+			}
+			break
+		}
+		if firstAttempt {
+			log.Printf("Connection %d: Initial connection to %s failed, retrying... (%v)", c.id, addr, err)
+			firstAttempt = false
+		}
+		if i < maxRetries-1 {
+			// Fixed 200ms delay for faster retries
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled while retrying connection")
+			case <-time.After(200 * time.Millisecond):
+				// Continue to next retry
+			}
+		}
+	}
 	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %v", addr, err)
+		return fmt.Errorf("failed to connect to %s after %d retries: %v", addr, maxRetries, err)
 	}
 	c.conn = conn
 	
@@ -135,10 +190,23 @@ func (c *Connection) startTCP(ctx context.Context) error {
 		
 		// Set socket buffer sizes for 100Gbps networks
 		if c.throughputMode {
-			// Use 16MB buffers for 100Gbps networks
-			tcpConn.SetWriteBuffer(16777216) // 16MB write buffer
-			tcpConn.SetReadBuffer(16777216)  // 16MB read buffer
-			tcpConn.SetNoDelay(false)        // Enable Nagle's algorithm for throughput
+			// Use large buffers based on configuration
+			writeBuf := c.bufferSize * 4 // 4x buffer size for socket buffers
+			if writeBuf < 16777216 {
+				writeBuf = 16777216 // Minimum 16MB
+			}
+			if writeBuf > 134217728 {
+				writeBuf = 134217728 // Max 128MB
+			}
+			tcpConn.SetWriteBuffer(writeBuf)
+			tcpConn.SetReadBuffer(writeBuf)
+			
+			// Apply TCP optimizations
+			if c.tcpNoDelay {
+				tcpConn.SetNoDelay(true)
+			} else {
+				tcpConn.SetNoDelay(false) // Enable Nagle's for throughput
+			}
 			
 			// Set TCP keepalive for long connections
 			tcpConn.SetKeepAlive(true)
@@ -146,8 +214,8 @@ func (c *Connection) startTCP(ctx context.Context) error {
 		} else {
 			// For packet mode, prioritize latency
 			tcpConn.SetNoDelay(true)         // Disable Nagle's for low latency
-			tcpConn.SetWriteBuffer(1048576)  // Still use 1MB for packet mode
-			tcpConn.SetReadBuffer(1048576)
+			tcpConn.SetWriteBuffer(4194304)  // 4MB for packet mode
+			tcpConn.SetReadBuffer(4194304)
 		}
 	}
 	
@@ -204,8 +272,9 @@ func (c *Connection) startUDP(ctx context.Context) error {
 
 func (c *Connection) tcpSender(ctx context.Context) {
 	if c.throughputMode {
-		// Throughput mode: use parallel workers for maximum speed
-		c.tcpSenderThroughputParallel(ctx)
+		// Throughput mode: send continuously for maximum speed
+		// NOTE: Parallel workers disabled due to socket contention
+		c.tcpSenderThroughput(ctx)
 	} else {
 		// Packet mode: precise packet-based sending for metrics
 		c.tcpSenderPacket(ctx)
@@ -213,6 +282,7 @@ func (c *Connection) tcpSender(ctx context.Context) {
 }
 
 func (c *Connection) tcpSenderThroughputParallel(ctx context.Context) {
+	log.Printf("Starting %d parallel workers for connection %d", c.numWorkers, c.id)
 	var wg sync.WaitGroup
 	wg.Add(c.numWorkers)
 	
@@ -220,20 +290,40 @@ func (c *Connection) tcpSenderThroughputParallel(ctx context.Context) {
 	for i := 0; i < c.numWorkers; i++ {
 		go func(workerID int) {
 			defer wg.Done()
+			log.Printf("Worker %d starting for connection %d", workerID, c.id)
 			// Each worker runs the throughput sender
 			c.tcpSenderThroughput(ctx)
 		}(i)
 	}
 	
 	wg.Wait()
+	log.Printf("All workers finished for connection %d", c.id)
 }
 
 func (c *Connection) tcpSenderThroughput(ctx context.Context) {
-	// Get buffer from pool
-	bufPtr := largeBufferPool.Get().(*[]byte)
-	buffer := (*bufPtr)[:c.bufferSize]
+	// Use the configured buffer size for writes
+	writeBufferSize := c.bufferSize
+	if writeBufferSize > 4194304 {
+		writeBufferSize = 4194304 // Cap at 4MB for safety
+	}
+	
+	log.Printf("Connection %d: Starting TCP sender in throughput mode, write buffer: %d", c.id, writeBufferSize)
+	
+	// Get appropriate buffer from pool based on size
+	var bufPtr *[]byte
+	var poolPut func(interface{})
+	
+	if writeBufferSize <= 65536 {
+		bufPtr = mediumBufferPool.Get().(*[]byte)
+		poolPut = mediumBufferPool.Put
+	} else {
+		bufPtr = largeBufferPool.Get().(*[]byte)
+		poolPut = largeBufferPool.Put
+	}
+	
+	buffer := (*bufPtr)[:writeBufferSize]
 	defer func() {
-		largeBufferPool.Put(bufPtr)
+		poolPut(bufPtr)
 	}()
 	
 	// Fill buffer with pattern once
@@ -251,8 +341,12 @@ func (c *Connection) tcpSenderThroughput(ctx context.Context) {
 	var localBytes int64
 	var localPackets int64
 	var batchCount int64
-	const batchSize = 100 // Update atomics every 100 iterations
+	batchSize := int64(c.sendBatchSize)
+	if batchSize <= 0 {
+		batchSize = 100 // Default batch size
+	}
 	
+	writeCount := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -261,11 +355,13 @@ func (c *Connection) tcpSenderThroughput(ctx context.Context) {
 				c.bytesSent.Add(localBytes)
 				c.packetsSent.Add(localPackets)
 			}
+			log.Printf("Connection %d: Sender stopping, total writes: %d, total bytes: %d", c.id, writeCount, c.bytesSent.Load())
 			return
 		default:
 			// Send large buffer at once
 			n, err := c.conn.Write(buffer)
 			if err != nil {
+				log.Printf("Connection %d: Write error: %v", c.id, err)
 				// On error, flush stats and continue
 				if localBytes > 0 {
 					c.bytesSent.Add(localBytes)
@@ -275,19 +371,25 @@ func (c *Connection) tcpSenderThroughput(ctx context.Context) {
 				}
 				continue
 			}
+			writeCount++
 			
 			// Accumulate local stats
 			localBytes += int64(n)
 			localPackets += int64(n) / packetSizeInv
 			batchCount++
 			
-			// Batch atomic updates
-			if batchCount >= batchSize {
+			// Batch atomic updates (or immediately on first write for debugging)
+			if batchCount >= batchSize || batchCount == 1 {
 				c.bytesSent.Add(localBytes)
 				c.packetsSent.Add(localPackets)
-				localBytes = 0
-				localPackets = 0
-				batchCount = 0
+				if writeCount == 1 {
+					log.Printf("Connection %d: First write successful, n=%d, localBytes=%d", c.id, n, localBytes)
+				}
+				if batchCount >= batchSize {
+					localBytes = 0
+					localPackets = 0
+					batchCount = 0
+				}
 				
 				// Only update full stats occasionally
 				c.updateStats()
@@ -330,8 +432,10 @@ func (c *Connection) tcpSenderPacket(ctx context.Context) {
 
 func (c *Connection) tcpReceiver(ctx context.Context) {
 	if c.throughputMode {
-		// Throughput mode: receive continuous stream
-		c.tcpReceiverThroughput(ctx)
+		// In throughput mode, we don't receive echo - server just consumes
+		// So receiver does nothing (like iperf client)
+		log.Printf("Connection %d: TCP receiver in throughput mode - no echo expected", c.id)
+		<-ctx.Done()
 	} else {
 		// Packet mode: process individual packets for RTT
 		c.tcpReceiverPacket(ctx)
@@ -339,11 +443,26 @@ func (c *Connection) tcpReceiver(ctx context.Context) {
 }
 
 func (c *Connection) tcpReceiverThroughput(ctx context.Context) {
-	// Get buffer from pool for receiving
-	bufPtr := largeBufferPool.Get().(*[]byte)
+	log.Printf("Connection %d: Starting TCP receiver in throughput mode, buffer size: %d", c.id, c.bufferSize)
+	
+	// Get appropriate buffer from pool based on size
+	var bufPtr *[]byte
+	var poolPut func(interface{})
+	
+	if c.bufferSize <= 65536 {
+		bufPtr = mediumBufferPool.Get().(*[]byte)
+		poolPut = mediumBufferPool.Put
+	} else if c.bufferSize <= 4194304 {
+		bufPtr = largeBufferPool.Get().(*[]byte)
+		poolPut = largeBufferPool.Put
+	} else {
+		bufPtr = jumboBufferPool.Get().(*[]byte)
+		poolPut = jumboBufferPool.Put
+	}
+	
 	buffer := (*bufPtr)[:c.bufferSize]
 	defer func() {
-		largeBufferPool.Put(bufPtr)
+		poolPut(bufPtr)
 	}()
 	
 	// Pre-calculate packet estimate divisor
@@ -356,7 +475,10 @@ func (c *Connection) tcpReceiverThroughput(ctx context.Context) {
 	var localBytes int64
 	var localPackets int64
 	var batchCount int64
-	const batchSize = 100
+	batchSize := int64(c.recvBatchSize)
+	if batchSize <= 0 {
+		batchSize = 100 // Default batch size
+	}
 	
 	// Remove deadline for maximum throughput
 	c.conn.SetReadDeadline(time.Time{})
@@ -469,7 +591,10 @@ func (c *Connection) udpSenderThroughput(ctx context.Context) {
 	var localBytes int64
 	var localPackets int64
 	var batchCount int64
-	const batchSize = 1000 // Update atomics every 1000 packets
+	batchSize := int64(c.sendBatchSize)
+	if batchSize <= 0 {
+		batchSize = 1000 // Default batch size for UDP
+	}
 	
 	for {
 		select {
@@ -576,7 +701,10 @@ func (c *Connection) udpReceiverThroughput(ctx context.Context) {
 	var localBytes int64
 	var localPackets int64
 	var batchCount int64
-	const batchSize = 1000
+	batchSize := int64(c.recvBatchSize)
+	if batchSize <= 0 {
+		batchSize = 1000 // Default batch size for UDP
+	}
 	
 	// Remove deadline for maximum throughput
 	c.udpConn.SetReadDeadline(time.Time{})
@@ -688,15 +816,12 @@ func (c *Connection) updateStatsThroughput() {
 	bytesSent := c.bytesSent.Load()
 	bytesReceived := c.bytesReceived.Load()
 	
-	// Calculate throughput
+	// Calculate throughput based on sent bytes (unidirectional like iperf)
 	elapsed := time.Since(c.startTime).Seconds()
 	var throughput float64
 	if elapsed > 0 {
-		if bytesReceived > 0 {
-			throughput = (float64(bytesReceived) * 8) / (elapsed * 1000000)
-		} else {
-			throughput = (float64(bytesSent) * 8) / (elapsed * 1000000)
-		}
+		// Always use sent bytes for throughput in throughput mode
+		throughput = (float64(bytesSent) * 8) / (elapsed * 1000000)
 	}
 	
 	// Single lock for stats update
@@ -784,4 +909,18 @@ func (c *Connection) GetStats() ConnectionStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.stats
+}
+
+func (c *Connection) periodicStatsUpdater(ctx context.Context) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.updateStats()
+		}
+	}
 }

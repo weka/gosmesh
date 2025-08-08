@@ -14,6 +14,7 @@ type Server struct {
 	port       int
 	protocol   string
 	packetSize int
+	bufferSize int  // New: configurable buffer size for throughput mode
 	
 	tcpListener net.Listener
 	udpConn     *net.UDPConn
@@ -22,11 +23,18 @@ type Server struct {
 }
 
 func NewServer(localIP string, port int, protocol string, packetSize int) *Server {
+	// Use larger buffer for throughput mode
+	bufferSize := packetSize
+	if packetSize <= 0 || bufferSize < 4194304 {
+		bufferSize = 4194304 // 4MB for high-speed networks
+	}
+	
 	return &Server{
 		localIP:    localIP,
 		port:       port,
 		protocol:   protocol,
 		packetSize: packetSize,
+		bufferSize: bufferSize,
 	}
 }
 
@@ -102,26 +110,46 @@ func (s *Server) runTCPServer(ctx context.Context) {
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	
-	buffer := make([]byte, s.packetSize)
+	remoteAddr := conn.RemoteAddr().String()
+	log.Printf("Server: New connection from %s", remoteAddr)
+	
+	// Use larger buffer for throughput mode
+	buffer := make([]byte, s.bufferSize)
+	
+	// Configure TCP connection for max throughput
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetWriteBuffer(16777216) // 16MB
+		tcpConn.SetReadBuffer(16777216)  // 16MB
+		tcpConn.SetNoDelay(false)        // Enable Nagle's for throughput
+	}
+	
+	// In throughput mode, just consume data without echoing
+	// This is more like iperf which measures unidirectional throughput
+	totalBytes := int64(0)
+	readCount := 0
 	
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Server: Connection from %s closing due to context, total bytes: %d", remoteAddr, totalBytes)
 			return
 		default:
-			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			// Remove deadline for maximum throughput
+			conn.SetReadDeadline(time.Time{})
 			n, err := conn.Read(buffer)
 			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					continue
-				}
+				log.Printf("Server: Connection from %s error: %v, total bytes: %d", remoteAddr, err, totalBytes)
 				return
 			}
+			totalBytes += int64(n)
+			readCount++
 			
-			// Echo back the packet
-			if n > 0 {
-				conn.Write(buffer[:n])
+			if readCount == 1 {
+				log.Printf("Server: First read from %s, n=%d", remoteAddr, n)
 			}
+			
+			// Don't echo in throughput mode - just consume data
+			// This allows sender to send at maximum speed
 		}
 	}
 }
@@ -129,7 +157,8 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 func (s *Server) runUDPServer(ctx context.Context) {
 	defer s.udpConn.Close()
 	
-	buffer := make([]byte, s.packetSize)
+	// Use max UDP packet size
+	buffer := make([]byte, 65507)
 	
 	for {
 		select {

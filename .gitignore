@@ -5,6 +5,11 @@
 *.so
 *.dylib
 gonet
+gonet_*
+gonet-*
+gonet.prof
+gonet.pgo
+*.pprof
 
 # Test binary, built with `go test -c`
 *.test
@@ -30,3 +35,8 @@ go.work.sum
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Temporary files
+.temp/
+*.tmp
+tmp/

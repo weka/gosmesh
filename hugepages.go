@@ -20,7 +20,7 @@ const (
 	MAP_HUGETLB   = 0x40000
 	MAP_HUGE_2MB  = 21 << 26
 	MAP_HUGE_1GB  = 30 << 26
-	MAP_POPULATE  = 0x8000
+	// MAP_POPULATE  = 0x8000  // Commented out - defined in syscall_linux.go
 	MAP_LOCKED    = 0x2000
 	
 	// NUMA memory policies

@@ -18,6 +18,7 @@ var (
 	ips         string
 	protocol    string
 	concurrency int
+	totalConnections int
 	duration    time.Duration
 	reportInterval time.Duration
 	packetSize  int
@@ -30,6 +31,17 @@ var (
 	enableIOUring bool
 	enableHugePages bool
 	enableOffload bool
+	// New optimization parameters
+	sendBatchSize int
+	recvBatchSize int
+	numQueues     int
+	busyPollUsecs int
+	tcpCork       bool
+	tcpQuickAck   bool
+	memArenaSize  int
+	ringSize      int
+	numWorkers    int
+	cpuList       string
 )
 
 func init() {
@@ -41,7 +53,8 @@ func init() {
 func main() {
 	flag.StringVar(&ips, "ips", "", "Comma-separated list of IPs for full mesh testing")
 	flag.StringVar(&protocol, "protocol", "tcp", "Protocol to use: udp or tcp")
-	flag.IntVar(&concurrency, "concurrency", 8, "Number of concurrent connections per target (default: 8 for 100Gbps)")
+	flag.IntVar(&totalConnections, "total-connections", 64, "Total connections to distribute across mesh (default: 64 for 100Gbps)")
+	flag.IntVar(&concurrency, "concurrency", 0, "Number of concurrent connections per target (0=auto-calculate from total-connections)")
 	flag.DurationVar(&duration, "duration", 30*time.Second, "Test duration")
 	flag.DurationVar(&reportInterval, "report-interval", 5*time.Second, "Interval for periodic reports")
 	flag.IntVar(&packetSize, "packet-size", 0, "Size of test packets in bytes (0=auto-detect, uses jumbo frames if available)")
@@ -54,6 +67,17 @@ func main() {
 	flag.BoolVar(&enableIOUring, "io-uring", true, "Enable io_uring for async I/O on Linux (default: true)")
 	flag.BoolVar(&enableHugePages, "huge-pages", true, "Enable huge pages for memory allocation (default: true)")
 	flag.BoolVar(&enableOffload, "hw-offload", true, "Enable hardware offloading (TSO/GSO/GRO) (default: true)")
+	// New optimization flags
+	flag.IntVar(&sendBatchSize, "send-batch-size", 64, "Number of packets to batch for sending")
+	flag.IntVar(&recvBatchSize, "recv-batch-size", 64, "Number of packets to batch for receiving")
+	flag.IntVar(&numQueues, "num-queues", 0, "Number of queues (0=auto-detect)")
+	flag.IntVar(&busyPollUsecs, "busy-poll-usecs", 50, "Microseconds for busy polling (0=disable)")
+	flag.BoolVar(&tcpCork, "tcp-cork", false, "Enable TCP_CORK for batching")
+	flag.BoolVar(&tcpQuickAck, "tcp-quickack", false, "Enable TCP_QUICKACK")
+	flag.IntVar(&memArenaSize, "memory-arena-size", 268435456, "Memory arena size in bytes (default: 256MB)")
+	flag.IntVar(&ringSize, "ring-size", 4096, "Ring buffer size for packet queues")
+	flag.IntVar(&numWorkers, "num-workers", 0, "Number of parallel workers (0=auto)")
+	flag.StringVar(&cpuList, "cpu-list", "", "CPU list for affinity (e.g., '0-3,8-11')")
 	flag.Parse()
 
 	if ips == "" {
@@ -70,6 +94,23 @@ func main() {
 	localIP := detectLocalIP(ipList)
 	if localIP == "" {
 		log.Fatal("Could not detect local IP from provided list")
+	}
+	
+	// Calculate concurrency per target if not specified
+	if concurrency == 0 {
+		// For full mesh, each node connects to n-1 other nodes
+		numTargets := len(ipList) - 1
+		if numTargets > 0 {
+			concurrency = totalConnections / numTargets
+			if concurrency < 1 {
+				concurrency = 1
+			}
+			log.Printf("Auto-calculated: %d connections per target (total: %d connections to %d targets)", 
+				concurrency, concurrency * numTargets, numTargets)
+		} else {
+			// Single node testing
+			concurrency = totalConnections
+		}
 	}
 
 	// Auto-detect packet size from MTU if not specified
@@ -97,7 +138,7 @@ func main() {
 	log.Printf("Local IP: %s", localIP)
 	log.Printf("Protocol: %s", protocol)
 	log.Printf("Targets: %v", ipList)
-	log.Printf("Concurrency: %d per target", concurrency)
+	log.Printf("Connections: %d per target (%d total across mesh)", concurrency, concurrency * (len(ipList) - 1))
 	log.Printf("Duration: %v", duration)
 	log.Printf("Packet Size: %d bytes", packetSize)
 	
@@ -113,14 +154,19 @@ func main() {
 		// Auto-set buffer size if not specified - use large buffers for 100Gbps
 		if bufferSize == 0 {
 			if protocol == "tcp" {
-				bufferSize = 1048576  // 1MB for TCP on high-speed networks
+				bufferSize = 4194304  // 4MB for TCP on high-speed networks (increased from 1MB)
 			} else {
-				bufferSize = 262144   // 256KB for UDP batching
+				bufferSize = 1048576  // 1MB for UDP batching (increased from 256KB)
 			}
 		}
 		log.Printf("Buffer Size: %d bytes (%.1f MB)", bufferSize, float64(bufferSize)/1048576)
-		log.Printf("Socket Buffers: 16MB (optimized for 100Gbps)")
-		log.Printf("Concurrency: %d connections per target", concurrency)
+		log.Printf("Socket Buffers: %dMB (optimized for 100Gbps)", bufferSize/1048576+16)
+		numTargets := len(ipList) - 1
+		totalConns := concurrency * numTargets
+		if numTargets == 0 {
+			totalConns = concurrency
+		}
+		log.Printf("Connections: %d per target, %d total", concurrency, totalConns)
 		
 		// Calculate theoretical max throughput
 		maxGbps := float64(concurrency * bufferSize * 8) / 1000000000.0 * 1000.0 // Assuming 1000 writes/sec
@@ -154,6 +200,18 @@ func main() {
 	tester.EnableIOUring = enableIOUring
 	tester.EnableHugePages = enableHugePages
 	tester.EnableOffload = enableOffload
+	tester.BufferSize = bufferSize
+	tester.SendBatchSize = sendBatchSize
+	tester.RecvBatchSize = recvBatchSize
+	tester.NumQueues = numQueues
+	tester.BusyPollUsecs = busyPollUsecs
+	tester.TCPCork = tcpCork
+	tester.TCPQuickAck = tcpQuickAck
+	tester.TCPNoDelay = tcpNoDelay
+	tester.MemArenaSize = memArenaSize
+	tester.RingSize = ringSize
+	tester.NumWorkers = numWorkers
+	tester.CPUList = cpuList
 	
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)

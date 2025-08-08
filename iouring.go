@@ -200,7 +200,7 @@ func (r *IOUring) mapRings() error {
 	sqeBytes, err := syscall.Mmap(r.fd, 0x10000000, int(sqeSize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED|MAP_POPULATE)
 	if err != nil {
 		syscall.Munmap(r.sqRing)
-		if r.cqRing != r.sqRing {
+		if &r.cqRing[0] != &r.sqRing[0] {
 			syscall.Munmap(r.cqRing)
 		}
 		return fmt.Errorf("mmap sqes failed: %v", err)

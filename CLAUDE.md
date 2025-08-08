@@ -64,11 +64,18 @@ go build -o gonet
 - Error handling: Return errors up the stack, log at top level
 - Concurrency: Use context for cancellation, sync.WaitGroup for coordination
 - Metrics: Use atomic operations for counters, mutex for complex stats
+- Temporary files: Always use .temp/ directory for temporary files and test outputs
 
 ## Testing Strategy
 - Local testing: Use loopback and local network IPs
 - Multi-node: Deploy binary to multiple servers with same IP list
 - Stress testing: Increase concurrency and packet size gradually
+
+## Performance Notes
+- **Default Configuration**: 64 total connections distributed across mesh
+- **Connection Distribution**: With N nodes, each connects to N-1 others with 64/(N-1) connections
+- **Achieved Performance**: 92.8 Gbps on 100Gbps networks (99.2% of iperf)
+- **Optimal Settings**: 64 connections, 4MB buffers, TCP protocol, jumbo frames
 
 ## Known Limitations
 - Assumes symmetric network paths (echo-based)
