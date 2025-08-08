@@ -29,6 +29,12 @@ type NetworkTester struct {
 	
 	startTime time.Time
 	endTime   time.Time
+	
+	// Optimization flags
+	UseOptimized    bool
+	EnableIOUring   bool
+	EnableHugePages bool
+	EnableOffload   bool
 }
 
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int, 
