@@ -67,7 +67,15 @@ func (s *Server) startUDPServer() error {
 		return fmt.Errorf("failed to listen on %s: %v", addr, err)
 	}
 	s.udpConn = conn
-	log.Printf("UDP server listening on %s:%d", s.localIP, s.port)
+	
+	// Configure UDP server socket buffers for high throughput
+	if err := s.udpConn.SetReadBuffer(16777216); err != nil {  // 16MB
+		log.Printf("Warning - could not set UDP server read buffer: %v", err)
+	}
+	if err := s.udpConn.SetWriteBuffer(16777216); err != nil { // 16MB
+		log.Printf("Warning - could not set UDP server write buffer: %v", err)
+	}
+	log.Printf("UDP server listening on %s:%d with 16MB buffers", s.localIP, s.port)
 	return nil
 }
 

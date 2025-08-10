@@ -186,15 +186,29 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 	elapsed := time.Since(nt.startTime)
 	report := fmt.Sprintf("\n=== Periodic Report (Elapsed: %v) ===\n", elapsed.Round(time.Second))
 	
+	throughputMode := nt.pps <= 0 // Check if in throughput mode
+	
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
 		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.TargetIP, conn.ID, nt.protocol)
-		report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n", 
-			stats.PacketsSent, stats.PacketsReceived, stats.PacketsLost, stats.LossRate)
-		report += fmt.Sprintf("  Throughput: %.2f Mbps | Avg RTT: %.2f ms | Jitter: %.2f ms\n",
-			stats.ThroughputMbps, stats.AvgRTTMs, stats.JitterMs)
-		report += fmt.Sprintf("  Min RTT: %.2f ms | Max RTT: %.2f ms\n", 
-			stats.MinRTTMs, stats.MaxRTTMs)
+		
+		// Show packet loss only in packet mode
+		if throughputMode {
+			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (throughput mode)\n", stats.PacketsSent)
+		} else {
+			report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n", 
+				stats.PacketsSent, stats.PacketsReceived, stats.PacketsLost, stats.LossRate)
+		}
+		
+		// Show RTT/Jitter only in packet mode
+		if throughputMode {
+			report += fmt.Sprintf("  Throughput: %.2f Mbps | RTT/Jitter: Not measured (throughput mode)\n", stats.ThroughputMbps)
+		} else {
+			report += fmt.Sprintf("  Throughput: %.2f Mbps | Avg RTT: %.2f ms | Jitter: %.2f ms\n",
+				stats.ThroughputMbps, stats.AvgRTTMs, stats.JitterMs)
+			report += fmt.Sprintf("  Min RTT: %.2f ms | Max RTT: %.2f ms\n", 
+				stats.MinRTTMs, stats.MaxRTTMs)
+		}
 	}
 	
 	return report
@@ -231,22 +245,34 @@ func (nt *NetworkTester) sendAPIReport() {
 	var totalPacketsSent, totalPacketsReceived int64
 	var avgRTT, avgJitter float64
 	var connCount int
+	var rttCount int // Count connections that actually have RTT data
 	
 	nt.mu.RLock()
+	throughputMode := nt.pps <= 0 // Check if we're in throughput mode
+	
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
 		totalThroughput += stats.ThroughputMbps
 		totalPacketsSent += stats.PacketsSent
 		totalPacketsReceived += stats.PacketsReceived
-		avgRTT += stats.AvgRTTMs
-		avgJitter += stats.JitterMs
+		
+		// Only include RTT/jitter if we have valid data (not in throughput mode)
+		if !throughputMode && stats.AvgRTTMs > 0 {
+			avgRTT += stats.AvgRTTMs
+			avgJitter += stats.JitterMs
+			rttCount++
+		}
 		connCount++
 	}
 	nt.mu.RUnlock()
 	
-	if connCount > 0 {
-		avgRTT /= float64(connCount)
-		avgJitter /= float64(connCount)
+	if rttCount > 0 {
+		avgRTT /= float64(rttCount)
+		avgJitter /= float64(rttCount)
+	} else {
+		// In throughput mode, these metrics aren't calculated
+		avgRTT = -1    // Use -1 to indicate "not measured"
+		avgJitter = -1
 	}
 	
 	// Convert Mbps to Gbps
@@ -254,8 +280,33 @@ func (nt *NetworkTester) sendAPIReport() {
 	
 	// Calculate packet loss percentage
 	var lossPercent float64
-	if totalPacketsSent > 0 {
-		lossPercent = float64(totalPacketsSent-totalPacketsReceived) / float64(totalPacketsSent) * 100.0
+	if throughputMode {
+		// Check if loss rate is applicable for this protocol/mode
+		nt.mu.RLock()
+		validLossCount := 0
+		var totalValidLossRate float64
+		
+		for _, conn := range nt.connections {
+			stats := conn.GetStats()
+			// Only include valid loss rates (not -1 which means "not applicable")
+			if stats.LossRate >= 0 {
+				totalValidLossRate += stats.LossRate
+				validLossCount++
+			}
+		}
+		nt.mu.RUnlock()
+		
+		if validLossCount > 0 {
+			lossPercent = totalValidLossRate / float64(validLossCount)
+		} else {
+			// All connections report -1 (not applicable, e.g., TCP throughput mode)
+			lossPercent = -1
+		}
+	} else {
+		// Packet mode - calculate based on actual packet counts
+		if totalPacketsSent > 0 {
+			lossPercent = float64(totalPacketsSent-totalPacketsReceived) / float64(totalPacketsSent) * 100.0
+		}
 	}
 	
 	// Create stats payload

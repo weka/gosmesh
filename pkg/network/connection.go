@@ -296,6 +296,19 @@ func (c *Connection) startUDP(ctx context.Context) error {
 	c.udpConn = conn
 	defer c.udpConn.Close()
 	
+	// Configure UDP socket buffers for high-throughput mode
+	if c.throughputMode {
+		// Set large receive buffer to prevent packet drops
+		if err := c.udpConn.SetReadBuffer(16777216); err != nil {  // 16MB
+			log.Printf("Connection %d: Warning - could not set UDP read buffer: %v", c.ID, err)
+		}
+		// Set large send buffer
+		if err := c.udpConn.SetWriteBuffer(16777216); err != nil { // 16MB
+			log.Printf("Connection %d: Warning - could not set UDP write buffer: %v", c.ID, err)
+		}
+		log.Printf("Connection %d: Set UDP socket buffers to 16MB", c.ID)
+	}
+	
 	// Start sender and receiver
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -716,6 +729,7 @@ func (c *Connection) udpReceiver(ctx context.Context) {
 }
 
 func (c *Connection) udpReceiverThroughput(ctx context.Context) {
+	
 	// Use large buffer for receiving
 	maxPacketSize := 65507 // Max UDP payload
 	
@@ -735,8 +749,8 @@ func (c *Connection) udpReceiverThroughput(ctx context.Context) {
 		batchSize = 1000 // Default batch size for UDP
 	}
 	
-	// Remove deadline for maximum throughput
-	c.udpConn.SetReadDeadline(time.Time{})
+	// Set a short read timeout to prevent blocking forever
+	c.udpConn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	
 	for {
 		select {
@@ -748,6 +762,8 @@ func (c *Connection) udpReceiverThroughput(ctx context.Context) {
 			}
 			return
 		default:
+			// Reset deadline for each read attempt
+			c.udpConn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 			n, err := c.udpConn.Read(buffer)
 			if err != nil {
 				// Flush stats on error
@@ -763,21 +779,24 @@ func (c *Connection) udpReceiverThroughput(ctx context.Context) {
 				return
 			}
 			
-			// Accumulate local stats
-			localBytes += int64(n)
-			localPackets++
-			batchCount++
-			
-			// Batch atomic updates
-			if batchCount >= batchSize {
-				c.bytesReceived.Add(localBytes)
-				c.packetsReceived.Add(localPackets)
-				localBytes = 0
-				localPackets = 0
-				batchCount = 0
+			// Only count if we got data
+			if n > 0 {
+				// Accumulate local stats
+				localBytes += int64(n)
+				localPackets++
+				batchCount++
 				
-				// Update full stats occasionally  
-				c.updateStats()
+				// Batch atomic updates
+				if batchCount >= batchSize {
+					c.bytesReceived.Add(localBytes)
+					c.packetsReceived.Add(localPackets)
+					localBytes = 0
+					localPackets = 0
+					batchCount = 0
+					
+					// Update full stats occasionally  
+					c.updateStats()
+				}
 			}
 		}
 	}
@@ -857,13 +876,25 @@ func (c *Connection) updateStatsThroughput() {
 	c.mu.Lock()
 	c.stats.PacketsSent = sent
 	c.stats.PacketsReceived = received
-	c.stats.PacketsLost = sent - received
 	c.stats.BytesSent = bytesSent
 	c.stats.BytesReceived = bytesReceived
 	c.stats.ThroughputMbps = throughput
-	if sent > 0 {
-		c.stats.LossRate = float64(sent-received) / float64(sent) * 100
+	
+	// Packet loss is only meaningful in packet mode (--pps mode)
+	// In throughput mode, we prioritize speed over echo reliability
+	if c.throughputMode {
+		c.stats.PacketsLost = -1    // Not applicable in throughput mode
+		c.stats.LossRate = -1       // Not applicable in throughput mode
+	} else {
+		// Packet mode (--pps specified): calculate packet loss for both TCP and UDP
+		c.stats.PacketsLost = sent - received
+		if sent > 0 {
+			c.stats.LossRate = float64(sent-received) / float64(sent) * 100
+		} else {
+			c.stats.LossRate = 0
+		}
 	}
+	
 	c.stats.LastUpdate = time.Now()
 	c.mu.Unlock()
 }
@@ -879,12 +910,21 @@ func (c *Connection) updateStatsFull() {
 	
 	c.stats.PacketsSent = sent
 	c.stats.PacketsReceived = received
-	c.stats.PacketsLost = sent - received
 	c.stats.BytesSent = bytesSent
 	c.stats.BytesReceived = bytesReceived
 	
-	if sent > 0 {
-		c.stats.LossRate = float64(sent-received) / float64(sent) * 100
+	// Packet loss calculation (only meaningful in packet mode)
+	if c.throughputMode {
+		c.stats.PacketsLost = -1    // Not applicable in throughput mode
+		c.stats.LossRate = -1       // Not applicable in throughput mode
+	} else {
+		// Packet mode: calculate packet loss
+		c.stats.PacketsLost = sent - received
+		if sent > 0 {
+			c.stats.LossRate = float64(sent-received) / float64(sent) * 100
+		} else {
+			c.stats.LossRate = 0
+		}
 	}
 	
 	// Calculate throughput based on received bytes (what actually got through)

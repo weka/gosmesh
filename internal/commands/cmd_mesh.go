@@ -990,6 +990,8 @@ func (mc *MeshController) displayStats() {
 	
 	first := true
 	activeCount := 0
+	rttMeasuredCount := 0 // Count servers with actual RTT measurements
+	packetLossMeasuredCount := 0 // Count servers with actual packet loss measurements
 	
 	for ip, stats := range mc.stats {
 		// Skip stale stats (older than 30 seconds)
@@ -999,9 +1001,6 @@ func (mc *MeshController) displayStats() {
 		
 		activeCount++
 		totalThroughput += stats.Throughput
-		totalPacketLoss += stats.PacketLoss
-		totalJitter += stats.Jitter
-		totalRTT += stats.RTT
 		
 		if first || stats.Throughput < minThroughput {
 			minThroughput = stats.Throughput
@@ -1014,34 +1013,47 @@ func (mc *MeshController) displayStats() {
 			maxServer = ip
 		}
 		
-		// Track packet loss min/max
-		if stats.PacketLoss < minPacketLoss {
-			minPacketLoss = stats.PacketLoss
-			minPacketLossServer = ip
-		}
-		if stats.PacketLoss > maxPacketLoss {
-			maxPacketLoss = stats.PacketLoss
-			maxPacketLossServer = ip
-		}
-		
-		// Track jitter min/max
-		if stats.Jitter < minJitter {
-			minJitter = stats.Jitter
-			minJitterServer = ip
-		}
-		if stats.Jitter > maxJitter {
-			maxJitter = stats.Jitter
-			maxJitterServer = ip
+		// Only process packet loss if actually measured (not -1)
+		if stats.PacketLoss >= 0 {
+			totalPacketLoss += stats.PacketLoss
+			packetLossMeasuredCount++
+			
+			// Track packet loss min/max
+			if stats.PacketLoss < minPacketLoss {
+				minPacketLoss = stats.PacketLoss
+				minPacketLossServer = ip
+			}
+			if stats.PacketLoss > maxPacketLoss {
+				maxPacketLoss = stats.PacketLoss
+				maxPacketLossServer = ip
+			}
 		}
 		
-		// Track RTT min/max
-		if stats.RTT < minRTT {
-			minRTT = stats.RTT
-			minRTTServer = ip
-		}
-		if stats.RTT > maxRTT {
-			maxRTT = stats.RTT
-			maxRTTServer = ip
+		// Only process RTT/jitter if actually measured (not -1)
+		if stats.RTT >= 0 && stats.Jitter >= 0 {
+			totalJitter += stats.Jitter
+			totalRTT += stats.RTT
+			rttMeasuredCount++
+			
+			// Track jitter min/max
+			if stats.Jitter < minJitter {
+				minJitter = stats.Jitter
+				minJitterServer = ip
+			}
+			if stats.Jitter > maxJitter {
+				maxJitter = stats.Jitter
+				maxJitterServer = ip
+			}
+			
+			// Track RTT min/max
+			if stats.RTT < minRTT {
+				minRTT = stats.RTT
+				minRTTServer = ip
+			}
+			if stats.RTT > maxRTT {
+				maxRTT = stats.RTT
+				maxRTTServer = ip
+			}
 		}
 	}
 	
@@ -1051,9 +1063,6 @@ func (mc *MeshController) displayStats() {
 	
 	// Calculate averages
 	avgThroughput := totalThroughput / float64(activeCount)
-	avgPacketLoss := totalPacketLoss / float64(activeCount)
-	avgJitter := totalJitter / float64(activeCount)
-	avgRTT := totalRTT / float64(activeCount)
 	
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Printf("\n=== Mesh Statistics [%s] ===\n", timestamp)
@@ -1066,19 +1075,33 @@ func (mc *MeshController) displayStats() {
 		maxServer, maxThroughput, minServer, minThroughput)
 	
 	// Packet loss stats
-	fmt.Printf("\nPacket Loss:\n")
-	fmt.Printf("  Avg: %.2f%% | Best: %s (%.2f%%) | Worst: %s (%.2f%%)\n", 
-		avgPacketLoss, minPacketLossServer, minPacketLoss, maxPacketLossServer, maxPacketLoss)
+	if packetLossMeasuredCount > 0 {
+		avgPacketLoss := totalPacketLoss / float64(packetLossMeasuredCount)
+		fmt.Printf("\nPacket Loss:\n")
+		fmt.Printf("  Avg: %.2f%% | Best: %s (%.2f%%) | Worst: %s (%.2f%%)\n", 
+			avgPacketLoss, minPacketLossServer, minPacketLoss, maxPacketLossServer, maxPacketLoss)
+	} else {
+		fmt.Printf("\nPacket Loss: Not applicable (throughput mode)\n")
+	}
 	
-	// Jitter stats
-	fmt.Printf("\nJitter:\n")
-	fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
-		avgJitter, minJitterServer, minJitter, maxJitterServer, maxJitter)
-	
-	// RTT stats
-	fmt.Printf("\nRTT:\n")
-	fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
-		avgRTT, minRTTServer, minRTT, maxRTTServer, maxRTT)
+	// Only show RTT/Jitter if we have measurements (packet mode)
+	if rttMeasuredCount > 0 {
+		avgJitter := totalJitter / float64(rttMeasuredCount)
+		avgRTT := totalRTT / float64(rttMeasuredCount)
+		
+		// Jitter stats
+		fmt.Printf("\nJitter:\n")
+		fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
+			avgJitter, minJitterServer, minJitter, maxJitterServer, maxJitter)
+		
+		// RTT stats
+		fmt.Printf("\nRTT:\n")
+		fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
+			avgRTT, minRTTServer, minRTT, maxRTTServer, maxRTT)
+	} else {
+		// Throughput mode - RTT/jitter not measured
+		fmt.Printf("\nRTT/Jitter: Not measured (throughput mode)\n")
+	}
 	
 	fmt.Printf("=======================\n")
 }
