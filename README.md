@@ -124,13 +124,17 @@ GosMesh operates in two distinct modes that provide different types of measureme
 **Purpose**: Network quality and reliability measurement
 **Metrics available**:
 - ✅ **Throughput** - Based on actual packet delivery
-- ✅ **Packet Loss** - Accurate loss percentage via echo protocol
+- ✅ **Packet Loss** - **UDP only** - Accurate loss percentage via echo protocol
 - ✅ **RTT/Jitter** - Round-trip time statistics
 
+**Protocol considerations**:
+- **UDP**: All metrics available - recommended for quality testing
+- **TCP**: Packet loss not measured (TCP hides retransmissions from application)
+
 **Use cases**:
-- Network quality assessment
+- Network quality assessment (use UDP)
 - Latency-sensitive application testing
-- Packet loss troubleshooting
+- Packet loss troubleshooting (UDP only)
 
 ### PPS (Packets Per Second) Calculation
 
@@ -162,7 +166,7 @@ Packet Loss: Not applicable (throughput mode)
 RTT/Jitter: Not measured (throughput mode)
 ```
 
-#### Packet Mode Output  
+#### Packet Mode Output (UDP)
 ```bash
 === Mesh Statistics [2025-01-15 14:30:45] ===
 Active Servers: 4/4
@@ -181,9 +185,27 @@ RTT:
   Avg: 15.67 ms | Best: 10.0.0.2 (12.34 ms) | Worst: 10.0.0.3 (18.90 ms)
 ```
 
+#### Packet Mode Output (TCP)
+```bash
+=== Mesh Statistics [2025-01-15 14:30:45] ===
+Active Servers: 4/4
+
+Throughput:
+  Total: 45.67 Gbps | Avg: 11.42 Gbps
+  Best: 10.0.0.1 (12.34 Gbps) | Worst: 10.0.0.4 (10.23 Gbps)
+
+Packet Loss: Not applicable (use UDP for packet loss testing)
+
+Jitter:
+  Avg: 2.45 ms | Best: 10.0.0.1 (1.23 ms) | Worst: 10.0.0.4 (4.56 ms)
+
+RTT:
+  Avg: 15.67 ms | Best: 10.0.0.2 (12.34 ms) | Worst: 10.0.0.3 (18.90 ms)
+```
+
 ### Anomaly Detection (Packet Mode Only)
 When using `--pps`, the system automatically detects:
-- **High packet loss** (>5%)
+- **High packet loss** (>5%) - UDP only
 - **High latency** (>100ms average RTT)  
 - **High jitter** (>20ms)
 - **Low throughput** (<10 Mbps for TCP)

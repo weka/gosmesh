@@ -1081,7 +1081,11 @@ func (mc *MeshController) displayStats() {
 		fmt.Printf("  Avg: %.2f%% | Best: %s (%.2f%%) | Worst: %s (%.2f%%)\n", 
 			avgPacketLoss, minPacketLossServer, minPacketLoss, maxPacketLossServer, maxPacketLoss)
 	} else {
-		fmt.Printf("\nPacket Loss: Not applicable (throughput mode)\n")
+		if mc.config.Protocol == "tcp" {
+			fmt.Printf("\nPacket Loss: Not applicable (use UDP for packet loss testing)\n")
+		} else {
+			fmt.Printf("\nPacket Loss: Not applicable (throughput mode)\n")
+		}
 	}
 	
 	// Only show RTT/Jitter if we have measurements (packet mode)

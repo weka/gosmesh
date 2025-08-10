@@ -891,13 +891,13 @@ func (c *Connection) updateStatsThroughput() {
 	c.stats.BytesReceived = bytesReceived
 	c.stats.ThroughputMbps = throughput
 	
-	// Packet loss is only meaningful in packet mode (--pps mode)
-	// In throughput mode, we prioritize speed over echo reliability
-	if c.throughputMode {
-		c.stats.PacketsLost = -1    // Not applicable in throughput mode
-		c.stats.LossRate = -1       // Not applicable in throughput mode
+	// Packet loss calculation - only meaningful for UDP in packet mode
+	// TCP hides retransmissions from application, making loss measurement unreliable
+	if c.throughputMode || c.protocol == "tcp" {
+		c.stats.PacketsLost = -1    // Not applicable in throughput mode or TCP
+		c.stats.LossRate = -1       // Not applicable in throughput mode or TCP
 	} else {
-		// Packet mode (--pps specified): calculate packet loss for both TCP and UDP
+		// UDP packet mode only: calculate packet loss
 		c.stats.PacketsLost = sent - received
 		if sent > 0 {
 			c.stats.LossRate = float64(sent-received) / float64(sent) * 100
@@ -924,12 +924,13 @@ func (c *Connection) updateStatsFull() {
 	c.stats.BytesSent = bytesSent
 	c.stats.BytesReceived = bytesReceived
 	
-	// Packet loss calculation (only meaningful in packet mode)
-	if c.throughputMode {
-		c.stats.PacketsLost = -1    // Not applicable in throughput mode
-		c.stats.LossRate = -1       // Not applicable in throughput mode
+	// Packet loss calculation - only meaningful for UDP in packet mode
+	// TCP hides retransmissions from application, making loss measurement unreliable
+	if c.throughputMode || c.protocol == "tcp" {
+		c.stats.PacketsLost = -1    // Not applicable in throughput mode or TCP
+		c.stats.LossRate = -1       // Not applicable in throughput mode or TCP
 	} else {
-		// Packet mode: calculate packet loss
+		// UDP packet mode only: calculate packet loss
 		c.stats.PacketsLost = sent - received
 		if sent > 0 {
 			c.stats.LossRate = float64(sent-received) / float64(sent) * 100

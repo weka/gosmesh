@@ -129,11 +129,11 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 	// Use larger buffer for throughput mode
 	buffer := make([]byte, s.bufferSize)
 	
-	// Configure TCP connection 
+	// Configure TCP connection for packet mode echo performance
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetWriteBuffer(16777216) // 16MB
-		tcpConn.SetReadBuffer(16777216)  // 16MB
-		tcpConn.SetNoDelay(false)        // Enable Nagle's for throughput
+		tcpConn.SetWriteBuffer(4194304) // 4MB (smaller for packet mode)
+		tcpConn.SetReadBuffer(4194304)  // 4MB (smaller for packet mode)
+		tcpConn.SetNoDelay(true)        // Disable Nagle's for low latency echo
 	}
 	
 	totalBytes := int64(0)
@@ -168,12 +168,14 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 				// Check if this looks like a packet mode packet (has sequence + timestamp)
 				// For now, assume packet mode if packet is small and has header structure
 				if n <= 2048 {  // Packet mode typically uses smaller packets
-					// Echo the packet back for RTT measurement
-					_, writeErr := conn.Write(buffer[:n])
-					if writeErr != nil {
-						log.Printf("Server: Echo write error to %s: %v", remoteAddr, writeErr)
-						return
-					}
+					// Echo the packet back for RTT measurement (asynchronously to avoid blocking)
+					go func(data []byte) {
+						_, writeErr := conn.Write(data)
+						if writeErr != nil {
+							// Don't spam logs with write errors
+							return
+						}
+					}(buffer[:n])
 				}
 				// Large packets (>2KB) are assumed to be throughput mode - just consume
 			}

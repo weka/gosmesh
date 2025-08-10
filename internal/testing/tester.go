@@ -192,9 +192,11 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 		stats := conn.GetStats()
 		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.TargetIP, conn.ID, nt.protocol)
 		
-		// Show packet loss only in packet mode
+		// Show packet loss only for UDP in packet mode
 		if throughputMode {
 			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (throughput mode)\n", stats.PacketsSent)
+		} else if nt.protocol == "tcp" {
+			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (use UDP for packet loss testing)\n", stats.PacketsSent)
 		} else {
 			report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n", 
 				stats.PacketsSent, stats.PacketsReceived, stats.PacketsLost, stats.LossRate)
