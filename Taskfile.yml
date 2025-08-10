@@ -1,0 +1,102 @@
+version: '3'
+
+vars:
+  BINARY_NAME: gonet
+  BUILD_DIR: .temp
+  GO_FILES:
+    sh: find . -name '*.go' -not -path "./vendor/*"
+
+tasks:
+  default:
+    desc: Build for current platform
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
+
+  build:
+    desc: Build for current platform
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} .
+
+  build-linux:
+    desc: Cross-compile for Linux AMD64
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - GOOS=linux GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux .
+    env:
+      CGO_ENABLED: "0"
+
+  deploy-linux:
+    desc: "Build and deploy to remote server (usage: task deploy-linux SERVER=root@server)"
+    deps: [build-linux]
+    vars:
+      SERVER: '{{.SERVER | default "root@localhost"}}'
+    cmds:
+      - scp {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux {{.SERVER}}:/usr/local/bin/{{.BINARY_NAME}}
+      - ssh {{.SERVER}} "chmod +x /usr/local/bin/{{.BINARY_NAME}}"
+    preconditions:
+      - sh: '[ -n "{{.SERVER}}" ] && [ "{{.SERVER}}" != "root@localhost" ]'
+        msg: "Please specify a server: task deploy-linux SERVER=root@server-name"
+
+  deploy-all:
+    desc: "Deploy to all mesh nodes (usage: task deploy-all SERVERS='root@h1,root@h2,root@h3')"
+    deps: [build-linux]
+    vars:
+      SERVERS: '{{.SERVERS}}'
+    cmds:
+      - |
+        for server in {{.SERVERS}}; do
+          echo "Deploying to $server..."
+          scp {{.BUILD_DIR}}/{{.BINARY_NAME}}-linux $server:/usr/local/bin/{{.BINARY_NAME}}
+          ssh $server "chmod +x /usr/local/bin/{{.BINARY_NAME}}"
+        done
+    preconditions:
+      - sh: '[ -n "{{.SERVERS}}" ]'
+        msg: "Please specify servers: task deploy-all SERVERS='root@h1 root@h2 root@h3'"
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  test-local:
+    desc: Run a quick local mesh test
+    deps: [build]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY_NAME}} --ips 127.0.0.1,127.0.0.2,127.0.0.3 --duration 10s --concurrency 2
+
+  run-mesh:
+    desc: "Run mesh test with specified IPs (usage: task run-mesh IPS='10.0.0.1,10.0.0.2')"
+    deps: [build]
+    vars:
+      IPS: '{{.IPS}}'
+      DURATION: '{{.DURATION | default "30s"}}'
+      CONCURRENCY: '{{.CONCURRENCY | default "2"}}'
+      PROTOCOL: '{{.PROTOCOL | default "tcp"}}'
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY_NAME}} --ips {{.IPS}} --duration {{.DURATION}} --concurrency {{.CONCURRENCY}} --protocol {{.PROTOCOL}}
+    preconditions:
+      - sh: '[ -n "{{.IPS}}" ]'
+        msg: "Please specify IPs: task run-mesh IPS='10.0.0.1,10.0.0.2,10.0.0.3'"
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - gofmt -w {{.GO_FILES}}
+
+  lint:
+    desc: Run linter
+    cmds:
+      - golangci-lint run
+
+  install-deps:
+    desc: Install development dependencies
+    cmds:
+      - go mod download
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest

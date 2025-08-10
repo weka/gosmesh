@@ -40,3 +40,21 @@ Thumbs.db
 .temp/
 *.tmp
 tmp/
+
+# Test and deployment scripts (generated/temporary)
+*-test*.sh
+test-*.sh
+test_*.sh
+*-mesh*.sh
+*-deploy*.sh
+cleanup-*.sh
+quick-test.sh
+run-*.sh
+simple-*.sh
+
+# Test output and logs
+test-output.log
+*.log
+
+# Workers directory (if temporary)
+workers/

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +52,11 @@ type NetworkTester struct {
 	RingSize       int
 	NumWorkers     int
 	CPUList        string
+	
+	// API reporting
+	apiEndpoint    string
+	apiReportIP    string
+	apiTicker      *time.Ticker
 }
 
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int, 
@@ -128,6 +136,11 @@ func (nt *NetworkTester) Start() error {
 	// Start periodic reporting
 	nt.wg.Add(1)
 	go nt.periodicReporter()
+	
+	// Start API reporting if configured
+	if nt.apiEndpoint != "" {
+		nt.startAPIReporter()
+	}
 
 	// Schedule test end
 	if nt.duration > 0 {
@@ -177,9 +190,94 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 	return report
 }
 
+func (nt *NetworkTester) EnableAPIReporting(endpoint, reportIP string) {
+	nt.apiEndpoint = endpoint
+	nt.apiReportIP = reportIP
+}
+
+func (nt *NetworkTester) startAPIReporter() {
+	nt.apiTicker = time.NewTicker(1 * time.Second)
+	nt.wg.Add(1)
+	
+	go func() {
+		defer nt.wg.Done()
+		for {
+			select {
+			case <-nt.apiTicker.C:
+				nt.sendAPIReport()
+			case <-nt.ctx.Done():
+				if nt.apiTicker != nil {
+					nt.apiTicker.Stop()
+				}
+				return
+			}
+		}
+	}()
+}
+
+func (nt *NetworkTester) sendAPIReport() {
+	// Calculate aggregate stats
+	var totalThroughput float64
+	var totalPacketsSent, totalPacketsReceived int64
+	var avgRTT, avgJitter float64
+	var connCount int
+	
+	nt.mu.RLock()
+	for _, conn := range nt.connections {
+		stats := conn.GetStats()
+		totalThroughput += stats.ThroughputMbps
+		totalPacketsSent += stats.PacketsSent
+		totalPacketsReceived += stats.PacketsReceived
+		avgRTT += stats.AvgRTTMs
+		avgJitter += stats.JitterMs
+		connCount++
+	}
+	nt.mu.RUnlock()
+	
+	if connCount > 0 {
+		avgRTT /= float64(connCount)
+		avgJitter /= float64(connCount)
+	}
+	
+	// Convert Mbps to Gbps
+	throughputGbps := totalThroughput / 1000.0
+	
+	// Calculate packet loss percentage
+	var lossPercent float64
+	if totalPacketsSent > 0 {
+		lossPercent = float64(totalPacketsSent-totalPacketsReceived) / float64(totalPacketsSent) * 100.0
+	}
+	
+	// Create stats payload
+	stats := map[string]interface{}{
+		"ip":                   nt.apiReportIP,
+		"throughput_gbps":      throughputGbps,
+		"packet_loss_percent":  lossPercent,
+		"jitter_ms":           avgJitter,
+		"rtt_ms":              avgRTT,
+	}
+	
+	jsonData, err := json.Marshal(stats)
+	if err != nil {
+		log.Printf("Failed to marshal stats: %v", err)
+		return
+	}
+	
+	// Send to API endpoint
+	resp, err := http.Post(nt.apiEndpoint, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Failed to send stats to API: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+}
+
 func (nt *NetworkTester) Stop() {
 	nt.cancel()
 	nt.endTime = time.Now()
+	if nt.apiTicker != nil {
+		nt.apiTicker.Stop()
+	}
 }
 
 func (nt *NetworkTester) Wait() {

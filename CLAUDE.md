@@ -19,6 +19,40 @@ GoNet is a network testing tool designed to measure network performance metrics 
 
 ## Development Flow
 
+### Build System
+The project uses [Taskfile](https://taskfile.dev/) for build automation. Install with:
+```bash
+# macOS
+brew install go-task/tap/go-task
+
+# Linux
+sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d
+```
+
+### Common Build Commands
+```bash
+# Build for current platform (builds to .temp/ directory)
+task build
+
+# Cross-compile for Linux (builds to .temp/ directory)
+task build-linux
+
+# Deploy to a single server (uses binary from .temp/)
+task deploy-linux SERVER=root@h1-4-c
+
+# Deploy to multiple servers (uses binary from .temp/)
+task deploy-all SERVERS="root@h1 root@h2 root@h3"
+
+# Run local test (uses binary from .temp/)
+task test-local
+
+# Run mesh test with custom parameters (uses binary from .temp/)
+task run-mesh IPS="10.0.0.1,10.0.0.2" DURATION=60s CONCURRENCY=4
+
+# Clean build artifacts (removes entire .temp/ directory)
+task clean
+```
+
 ### Adding New Features
 When adding features, consider:
 1. Metrics are calculated per-connection in `connection.go`
@@ -26,10 +60,25 @@ When adding features, consider:
 3. Protocol-specific code is separated (TCP vs UDP methods)
 
 ### Testing Modifications
-To test changes:
+To test changes locally:
 ```bash
-go build -o gonet
-./gonet --ips <ip1>,<ip2>,<ip3> --duration 30s --concurrency 2
+# Quick build and test (uses .temp/ directory)
+task build
+task test-local
+
+# Or manually (note: binary is in .temp/ directory)
+./.temp/gonet --ips <ip1>,<ip2>,<ip3> --duration 30s --concurrency 2
+```
+
+For multi-node testing:
+```bash
+# Build and deploy to test servers
+task deploy-linux SERVER=root@server1
+task deploy-linux SERVER=root@server2
+task deploy-linux SERVER=root@server3
+
+# Or deploy to all at once
+task deploy-all SERVERS="root@server1 root@server2 root@server3"
 ```
 
 ### Common Tasks
@@ -64,7 +113,10 @@ go build -o gonet
 - Error handling: Return errors up the stack, log at top level
 - Concurrency: Use context for cancellation, sync.WaitGroup for coordination
 - Metrics: Use atomic operations for counters, mutex for complex stats
-- Temporary files: Always use .temp/ directory for temporary files and test outputs
+- **Build and Temporary Files**: ALWAYS use .temp/ directory for all build artifacts, temporary files, and test outputs
+  - All binaries are built into `.temp/` directory (configured in Taskfile.yml)
+  - Never place build artifacts or temporary files in project root
+  - Use `task clean` to remove all build artifacts from .temp/
 
 ## Testing Strategy
 - Local testing: Use loopback and local network IPs

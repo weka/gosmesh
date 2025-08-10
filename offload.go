@@ -350,45 +350,9 @@ func NewZeroCopySender(conn net.Conn) (*ZeroCopySender, error) {
 }
 
 // SendZeroCopy sends data with zero-copy
+// The actual implementation is platform-specific in offload_linux.go and offload_darwin.go
 func (z *ZeroCopySender) SendZeroCopy(buffers [][]byte) (int, error) {
-	// Prepare iovecs
-	iovecs := z.iovec[:0]
-	for _, buf := range buffers {
-		if len(buf) > 0 {
-			iovecs = append(iovecs, syscall.Iovec{
-				Base: &buf[0],
-				Len:  uint64(len(buf)),
-			})
-		}
-	}
-
-	// Prepare message header
-	var iovlen interface{}
-	if runtime.GOOS == "linux" {
-		iovlen = uint64(len(iovecs))
-	} else {
-		iovlen = int32(len(iovecs))
-	}
-	
-	msg := syscall.Msghdr{
-		Iov:    &iovecs[0],
-		Iovlen: iovlen.(uint64), // Will be cast appropriately
-	}
-
-	// Send with MSG_ZEROCOPY flag
-	n, _, errno := syscall.Syscall6(
-		syscall.SYS_SENDMSG,
-		uintptr(z.fd),
-		uintptr(unsafe.Pointer(&msg)),
-		0x4000000, // MSG_ZEROCOPY
-		0, 0, 0,
-	)
-
-	if errno != 0 {
-		return 0, errno
-	}
-
-	return int(n), nil
+	return z.SendBatchLinux(buffers)
 }
 
 // BatchSender implements batched sending for efficiency
