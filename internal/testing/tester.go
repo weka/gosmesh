@@ -146,8 +146,9 @@ func (nt *NetworkTester) Start() error {
 
 	// Schedule test end
 	if nt.duration > 0 {
+		log.Printf("Test will stop automatically after %v", nt.duration)
 		time.AfterFunc(nt.duration, func() {
-			log.Println("Test duration reached, stopping...")
+			log.Printf("Test duration (%v) reached, stopping...", nt.duration)
 			nt.Stop()
 		})
 	}

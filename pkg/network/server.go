@@ -81,9 +81,11 @@ func (s *Server) Run(ctx context.Context) {
 
 func (s *Server) runTCPServer(ctx context.Context) {
 	defer s.tcpListener.Close()
+	defer log.Printf("TCP server shutdown complete")
 	
 	go func() {
 		<-ctx.Done()
+		log.Printf("TCP server context cancelled, closing listener")
 		s.tcpListener.Close()
 	}()
 	
@@ -92,6 +94,9 @@ func (s *Server) runTCPServer(ctx context.Context) {
 		if err != nil {
 			select {
 			case <-ctx.Done():
+				log.Printf("TCP server exiting due to context cancellation")
+				// Wait for all connection handlers to finish before returning
+				s.wg.Wait()
 				return
 			default:
 				log.Printf("Failed to accept connection: %v", err)
@@ -156,6 +161,7 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 
 func (s *Server) runUDPServer(ctx context.Context) {
 	defer s.udpConn.Close()
+	defer log.Printf("UDP server shutdown complete")
 	
 	// Use max UDP packet size
 	buffer := make([]byte, 65507)
@@ -163,6 +169,7 @@ func (s *Server) runUDPServer(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("UDP server exiting due to context cancellation")
 			return
 		default:
 			s.udpConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))

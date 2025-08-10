@@ -22,13 +22,36 @@ import (
 )
 
 type MeshConfig struct {
-	IPs       string
-	Duration  time.Duration
-	Port      int
-	APIPort   int
-	Protocol  string
-	SSHHosts  string  // SSH hosts for deployment (host1,host2,host3)
-	Verbose   bool    // Enable verbose logging
+	IPs              string
+	Duration         time.Duration
+	Port             int
+	APIPort          int
+	Protocol         string
+	SSHHosts         string  // SSH hosts for deployment (host1,host2,host3)
+	Verbose          bool    // Enable verbose logging
+	TotalConnections int
+	Concurrency      int
+	ReportInterval   time.Duration
+	PacketSize       int
+	PPS              int
+	ThroughputMode   bool
+	BufferSize       int
+	TCPNoDelay       bool
+	UseOptimized     bool
+	EnableIOUring    bool
+	EnableHugePages  bool
+	EnableOffload    bool
+	SendBatchSize    int
+	RecvBatchSize    int
+	NumQueues        int
+	BusyPollUsecs    int
+	TCPCork          bool
+	TCPQuickAck      bool
+	MemArenaSize     int
+	RingSize         int
+	NumWorkers       int
+	CPUList          string
+	ReportTo         string
 }
 
 type ServerStats struct {
@@ -68,6 +91,29 @@ func MeshCommand(args []string) {
 	fs.IntVar(&config.APIPort, "api-port", 8080, "Port for API server")
 	fs.StringVar(&config.Protocol, "protocol", "tcp", "Protocol to use: udp or tcp")
 	fs.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
+	fs.IntVar(&config.TotalConnections, "total-connections", 64, "Total connections each server establishes (distributed across all peers)")
+	fs.IntVar(&config.Concurrency, "concurrency", 0, "Number of concurrent connections per target (0=auto-calculate)")
+	fs.DurationVar(&config.ReportInterval, "report-interval", 5*time.Second, "Interval for periodic reports")
+	fs.IntVar(&config.PacketSize, "packet-size", 0, "Size of test packets in bytes (0=auto-detect)")
+	fs.IntVar(&config.PPS, "pps", 0, "Packets per second per connection (0=unlimited)")
+	fs.BoolVar(&config.ThroughputMode, "throughput-mode", true, "Enable throughput mode optimizations")
+	fs.IntVar(&config.BufferSize, "buffer-size", 0, "Buffer size for throughput mode (0=auto)")
+	fs.BoolVar(&config.TCPNoDelay, "tcp-nodelay", false, "Enable TCP_NODELAY")
+	fs.BoolVar(&config.UseOptimized, "optimized", true, "Use optimized connections")
+	fs.BoolVar(&config.EnableIOUring, "io-uring", true, "Enable io_uring on Linux")
+	fs.BoolVar(&config.EnableHugePages, "huge-pages", true, "Enable huge pages")
+	fs.BoolVar(&config.EnableOffload, "hw-offload", true, "Enable hardware offloading")
+	fs.IntVar(&config.SendBatchSize, "send-batch-size", 64, "Send batch size")
+	fs.IntVar(&config.RecvBatchSize, "recv-batch-size", 64, "Receive batch size")
+	fs.IntVar(&config.NumQueues, "num-queues", 0, "Number of queues (0=auto)")
+	fs.IntVar(&config.BusyPollUsecs, "busy-poll-usecs", 50, "Busy polling microseconds")
+	fs.BoolVar(&config.TCPCork, "tcp-cork", false, "Enable TCP_CORK")
+	fs.BoolVar(&config.TCPQuickAck, "tcp-quickack", false, "Enable TCP_QUICKACK")
+	fs.IntVar(&config.MemArenaSize, "memory-arena-size", 268435456, "Memory arena size (default: 256MB)")
+	fs.IntVar(&config.RingSize, "ring-size", 4096, "Ring buffer size")
+	fs.IntVar(&config.NumWorkers, "num-workers", 0, "Number of workers (0=auto)")
+	fs.StringVar(&config.CPUList, "cpu-list", "", "CPU affinity list")
+	fs.StringVar(&config.ReportTo, "report-to", "", "API endpoint to report statistics to")
 
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -162,7 +208,7 @@ func getLocalIPAddress() string {
 
 func (mc *MeshController) Run() {
 	if !mc.config.Verbose {
-		fmt.Printf("🚀 GoNet Mesh Controller\n")
+		fmt.Printf("🚀 GosMesh Mesh Controller\n")
 		fmt.Printf("Controller: %s | Nodes: %d | Duration: %v\n\n", mc.localIP, len(mc.ipList), mc.config.Duration)
 	} else {
 		log.Printf("Starting mesh controller on %s", mc.localIP)
@@ -467,10 +513,18 @@ func (mc *MeshController) startService(ip string, index int) error {
 	if mc.config.Verbose {
 		log.Printf("[%s] 🔍 Checking service health...", ip)
 	}
+	// Choose the correct ss command based on protocol
+	var ssCmd string
+	if mc.config.Protocol == "udp" {
+		ssCmd = fmt.Sprintf("ss -uln | grep ':%d ' >/dev/null 2>&1", mc.config.Port)
+	} else {
+		ssCmd = fmt.Sprintf("ss -tln | grep ':%d ' >/dev/null 2>&1", mc.config.Port)
+	}
+	
 	verifyCmd := fmt.Sprintf(`
 		echo "[VERIFY] Quick service check..."
 		# Check if service is active and listening in one go
-		if systemctl is-active %s >/dev/null 2>&1 && pgrep -f 'gosmesh run' >/dev/null 2>&1 && ss -tln | grep ':%d ' >/dev/null 2>&1; then
+		if systemctl is-active %s >/dev/null 2>&1 && pgrep -f 'gosmesh run' >/dev/null 2>&1 && %s; then
 			echo "[SUCCESS] Service active, process running, port listening"
 			exit 0
 		fi
@@ -479,12 +533,12 @@ func (mc *MeshController) startService(ip string, index int) error {
 		echo "[ERROR] Service verification failed"
 		echo "Service active: $(systemctl is-active %s 2>/dev/null || echo 'inactive')"
 		echo "Process running: $(pgrep -f 'gosmesh run' >/dev/null 2>&1 && echo 'yes' || echo 'no')"
-		echo "Port listening: $(ss -tln | grep ':%d ' >/dev/null 2>&1 && echo 'yes' || echo 'no')"
+		echo "Port listening: $(%s && echo 'yes' || echo 'no')"
 		
 		echo "Recent logs:"
 		journalctl -u %s --no-pager --since "30 seconds ago" --lines=5 || true
 		exit 1
-	`, serviceName, mc.config.Port, serviceName, mc.config.Port, serviceName)
+	`, serviceName, ssCmd, serviceName, ssCmd, serviceName)
 	
 	if err := mc.execSSH(sshHost, verifyCmd, "verify service health"); err != nil {
 		// Simple diagnostic - don't spam logs
@@ -544,6 +598,52 @@ func (mc *MeshController) execSSH(sshHost, command, description string) error {
 				case 130:
 					log.Printf("[SSH] Exit 130 - interrupted by signal")
 				}
+			}
+			log.Printf("[SSH] Error: %v", err)
+			if len(output) > 0 {
+				log.Printf("[SSH] Output: %s", string(output))
+			} else {
+				log.Printf("[SSH] No output received")
+			}
+		}
+		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
+	}
+	
+	if mc.config.Verbose {
+		if len(output) > 0 {
+			log.Printf("[SSH] Output: %s", strings.TrimSpace(string(output)))
+		}
+		log.Printf("[SSH] %s completed successfully", description)
+	}
+	return nil
+}
+
+// execSSHWithContext executes a remote command via SSH with context support
+func (mc *MeshController) execSSHWithContext(ctx context.Context, sshHost, command, description string) error {
+	if mc.config.Verbose {
+		log.Printf("[SSH] Executing %s on %s with context", description, sshHost)
+	}
+	
+	// Use CommandContext for proper context handling
+	cmd := exec.CommandContext(ctx, "ssh", 
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=5",
+		"-o", "BatchMode=yes",
+		"-o", "ServerAliveInterval=5",
+		"-o", "ServerAliveCountMax=1",
+		sshHost, command)
+	
+	if mc.config.Verbose {
+		log.Printf("[SSH] Command: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=1 %s '%s'", sshHost, command)
+	}
+	
+	output, err := cmd.CombinedOutput()
+	
+	if err != nil {
+		if mc.config.Verbose {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode := exitErr.ExitCode()
+				log.Printf("[SSH] Command failed with exit code %d", exitCode)
 			}
 			log.Printf("[SSH] Error: %v", err)
 			if len(output) > 0 {
@@ -645,120 +745,11 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	}
 	if mc.config.Verbose {
 		log.Printf("[%s] SSH connectivity confirmed", ip)
-		
-		// Step 1: Thorough cleanup of old processes and services (individual commands)
-		log.Printf("[%s] Performing thorough cleanup...", ip)
-		
-		// Stop service if it exists
-		log.Printf("[%s] Stopping existing service...", ip)
-	}
-	stopCmd := fmt.Sprintf("systemctl stop %s || true", serviceName)
-	if err := mc.execSSH(sshHost, stopCmd, "stop service"); err != nil {
-		return fmt.Errorf("[%s] stop service failed: %v", ip, err)
 	}
 	
-	// Disable service if it exists
-	if mc.config.Verbose {
-		log.Printf("[%s] Disabling existing service...", ip)
-	}
-	disableCmd := fmt.Sprintf("systemctl disable %s || true", serviceName)
-	if err := mc.execSSH(sshHost, disableCmd, "disable service"); err != nil {
-		return fmt.Errorf("[%s] disable service failed: %v", ip, err)
-	}
-	
-	// Reset failed state (redirect stderr to avoid hanging)
-	if mc.config.Verbose {
-		log.Printf("[%s] Resetting failed state...", ip)
-	}
-	resetCmd := fmt.Sprintf("systemctl reset-failed %s 2>/dev/null || true", serviceName)
-	if err := mc.execSSH(sshHost, resetCmd, "reset failed state"); err != nil {
-		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
-	}
-	
-	// Kill processes running specifically from /opt/gosmesh/ path using their executable location
-	if mc.config.Verbose {
-		log.Printf("[%s] Finding processes running from /opt/gosmesh...", ip)
-	}
-	findCmd := fmt.Sprintf(`
-for pid in $(pgrep gosmesh 2>/dev/null || true); do
-    if [ -n "$pid" ]; then
-        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
-        if [ "$exe_path" = "%s" ]; then
-            echo "Found process $pid running from %s"
-        fi
-    fi
-done
-`, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, findCmd, "find /opt/gosmesh processes"); err != nil {
-		return fmt.Errorf("[%s] find processes failed: %v", ip, err)
-	}
-	
-	if mc.config.Verbose {
-		log.Printf("[%s] Killing processes from /opt/gosmesh...", ip)
-	}
-	killCmd := fmt.Sprintf(`
-killed=false
-for pid in $(pgrep gosmesh 2>/dev/null || true); do
-    if [ -n "$pid" ]; then
-        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
-        if [ "$exe_path" = "%s" ]; then
-            echo "Killing process $pid from %s"
-            kill $pid && echo "Killed $pid" || echo "Failed to kill $pid"
-            killed=true
-        fi
-    fi
-done
-if [ "$killed" = "false" ]; then
-    echo "No processes from /opt/gosmesh to kill"
-fi
-`, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, killCmd, "kill /opt/gosmesh processes"); err != nil {
-		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
-	}
-	
-	if mc.config.Verbose {
-		log.Printf("[%s] Force killing any remaining processes from /opt/gosmesh...", ip)
-	}
-	forceKillCmd := fmt.Sprintf(`
-killed=false
-for pid in $(pgrep gosmesh 2>/dev/null || true); do
-    if [ -n "$pid" ]; then
-        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
-        if [ "$exe_path" = "%s" ]; then
-            echo "Force killing process $pid from %s"
-            kill -9 $pid && echo "Force killed $pid" || echo "Failed to force kill $pid"
-            killed=true
-        fi
-    fi
-done
-if [ "$killed" = "false" ]; then
-    echo "No processes from /opt/gosmesh to force kill"
-fi
-`, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, forceKillCmd, "force kill /opt/gosmesh processes"); err != nil {
-		return fmt.Errorf("[%s] force kill processes failed: %v", ip, err)
-	}
-	
-	// Remove files
-	if mc.config.Verbose {
-		log.Printf("[%s] Removing old files...", ip)
-	}
-	removeCmd := fmt.Sprintf("rm -f %s /etc/systemd/system/%s.service", remoteBinary, serviceName)
-	if err := mc.execSSH(sshHost, removeCmd, "remove files"); err != nil {
-		return fmt.Errorf("[%s] remove files failed: %v", ip, err)
-	}
-	
-	// Reload systemd
-	if mc.config.Verbose {
-		log.Printf("[%s] Reloading systemd...", ip)
-	}
-	reloadCmd := "systemctl daemon-reload"
-	if err := mc.execSSH(sshHost, reloadCmd, "reload systemd"); err != nil {
-		return fmt.Errorf("[%s] reload systemd failed: %v", ip, err)
-	}
-	
-	if mc.config.Verbose {
-		log.Printf("[%s] Cleanup completed successfully", ip)
+	// Step 1: Thorough cleanup of old processes and services
+	if err := mc.cleanupNode(ip, sshHost); err != nil {
+		return err
 	}
 	
 	// Step 2: Create remote directory
@@ -835,13 +826,85 @@ func (mc *MeshController) generateSystemdUnit(binaryPath string) string {
 		log.Printf("Generated API endpoint for reporting: %s", apiEndpoint)
 	}
 	
+	// Build command arguments
+	cmd := fmt.Sprintf("%s run --ips %s --duration %s --port %d --protocol %s --report-to %s", 
+		binaryPath, mc.config.IPs, mc.config.Duration, mc.config.Port, mc.config.Protocol, apiEndpoint)
+	
+	// Add optional flags if they differ from defaults
+	if mc.config.TotalConnections != 64 {
+		cmd += fmt.Sprintf(" --total-connections %d", mc.config.TotalConnections)
+	}
+	if mc.config.Concurrency != 0 {
+		cmd += fmt.Sprintf(" --concurrency %d", mc.config.Concurrency)
+	}
+	if mc.config.ReportInterval != 5*time.Second {
+		cmd += fmt.Sprintf(" --report-interval %s", mc.config.ReportInterval)
+	}
+	if mc.config.PacketSize != 0 {
+		cmd += fmt.Sprintf(" --packet-size %d", mc.config.PacketSize)
+	}
+	if mc.config.PPS != 0 {
+		cmd += fmt.Sprintf(" --pps %d", mc.config.PPS)
+	}
+	if !mc.config.ThroughputMode {
+		cmd += " --throughput-mode=false"
+	}
+	if mc.config.BufferSize != 0 {
+		cmd += fmt.Sprintf(" --buffer-size %d", mc.config.BufferSize)
+	}
+	if mc.config.TCPNoDelay {
+		cmd += " --tcp-nodelay"
+	}
+	if !mc.config.UseOptimized {
+		cmd += " --optimized=false"
+	}
+	if !mc.config.EnableIOUring {
+		cmd += " --io-uring=false"
+	}
+	if !mc.config.EnableHugePages {
+		cmd += " --huge-pages=false"
+	}
+	if !mc.config.EnableOffload {
+		cmd += " --hw-offload=false"
+	}
+	if mc.config.SendBatchSize != 64 {
+		cmd += fmt.Sprintf(" --send-batch-size %d", mc.config.SendBatchSize)
+	}
+	if mc.config.RecvBatchSize != 64 {
+		cmd += fmt.Sprintf(" --recv-batch-size %d", mc.config.RecvBatchSize)
+	}
+	if mc.config.NumQueues != 0 {
+		cmd += fmt.Sprintf(" --num-queues %d", mc.config.NumQueues)
+	}
+	if mc.config.BusyPollUsecs != 50 {
+		cmd += fmt.Sprintf(" --busy-poll-usecs %d", mc.config.BusyPollUsecs)
+	}
+	if mc.config.TCPCork {
+		cmd += " --tcp-cork"
+	}
+	if mc.config.TCPQuickAck {
+		cmd += " --tcp-quickack"
+	}
+	if mc.config.MemArenaSize != 268435456 {
+		cmd += fmt.Sprintf(" --memory-arena-size %d", mc.config.MemArenaSize)
+	}
+	if mc.config.RingSize != 4096 {
+		cmd += fmt.Sprintf(" --ring-size %d", mc.config.RingSize)
+	}
+	if mc.config.NumWorkers != 0 {
+		cmd += fmt.Sprintf(" --num-workers %d", mc.config.NumWorkers)
+	}
+	if mc.config.CPUList != "" {
+		cmd += fmt.Sprintf(" --cpu-list %s", mc.config.CPUList)
+	}
+	
 	return fmt.Sprintf(`[Unit]
-Description=GoNet Mesh Testing Service
+Description=GosMesh Mesh Testing Service
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=%s run --ips %s --duration %s --port %d --protocol %s --report-to %s
+ExecStart=%s
 StandardOutput=journal
 StandardError=journal
 Restart=no
@@ -851,7 +914,7 @@ TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
-`, binaryPath, mc.config.IPs, mc.config.Duration, mc.config.Port, mc.config.Protocol, apiEndpoint)
+`, cmd)
 }
 
 func (mc *MeshController) startAPIServer() {
@@ -956,25 +1019,126 @@ func (mc *MeshController) displayStats() {
 	fmt.Printf("=======================\n")
 }
 
+// cleanupNode performs thorough cleanup on a single node
+func (mc *MeshController) cleanupNode(ip, sshHost string) error {
+	serviceName := "gosmesh-mesh"
+	remoteBinary := "/opt/gosmesh/gosmesh"
+	
+	// Stop service if it exists
+	if mc.config.Verbose {
+		log.Printf("[%s] Stopping existing service...", ip)
+	}
+	stopCmd := fmt.Sprintf("systemctl stop %s || true", serviceName)
+	if err := mc.execSSH(sshHost, stopCmd, "stop service"); err != nil {
+		return fmt.Errorf("[%s] stop service failed: %v", ip, err)
+	}
+	
+	// Disable service if it exists
+	if mc.config.Verbose {
+		log.Printf("[%s] Disabling existing service...", ip)
+	}
+	disableCmd := fmt.Sprintf("systemctl disable %s || true", serviceName)
+	if err := mc.execSSH(sshHost, disableCmd, "disable service"); err != nil {
+		return fmt.Errorf("[%s] disable service failed: %v", ip, err)
+	}
+	
+	// Reset failed state (redirect stderr to avoid hanging)
+	if mc.config.Verbose {
+		log.Printf("[%s] Resetting failed state...", ip)
+	}
+	resetCmd := fmt.Sprintf("systemctl reset-failed %s 2>/dev/null || true", serviceName)
+	if err := mc.execSSH(sshHost, resetCmd, "reset failed state"); err != nil {
+		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
+	}
+	
+	// Kill processes running specifically from /opt/gosmesh/ path using their executable location
+	if mc.config.Verbose {
+		log.Printf("[%s] Killing processes from /opt/gosmesh...", ip)
+	}
+	killCmd := fmt.Sprintf(`
+killed=false
+for pid in $(pgrep gosmesh 2>/dev/null || true); do
+    if [ -n "$pid" ]; then
+        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
+        if [ "$exe_path" = "%s" ]; then
+            echo "Killing process $pid from %s"
+            kill $pid && echo "Killed $pid" || echo "Failed to kill $pid"
+            killed=true
+        fi
+    fi
+done
+if [ "$killed" = "false" ]; then
+    echo "No processes from /opt/gosmesh to kill"
+fi
+`, remoteBinary, remoteBinary)
+	if err := mc.execSSH(sshHost, killCmd, "kill /opt/gosmesh processes"); err != nil {
+		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
+	}
+	
+	// Force kill any remaining processes
+	if mc.config.Verbose {
+		log.Printf("[%s] Force killing any remaining processes from /opt/gosmesh...", ip)
+	}
+	forceKillCmd := fmt.Sprintf(`
+killed=false
+for pid in $(pgrep gosmesh 2>/dev/null || true); do
+    if [ -n "$pid" ]; then
+        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
+        if [ "$exe_path" = "%s" ]; then
+            echo "Force killing process $pid from %s"
+            kill -9 $pid && echo "Force killed $pid" || echo "Failed to force kill $pid"
+            killed=true
+        fi
+    fi
+done
+if [ "$killed" = "false" ]; then
+    echo "No processes from /opt/gosmesh to force kill"
+fi
+`, remoteBinary, remoteBinary)
+	if err := mc.execSSH(sshHost, forceKillCmd, "force kill /opt/gosmesh processes"); err != nil {
+		return fmt.Errorf("[%s] force kill processes failed: %v", ip, err)
+	}
+	
+	// Remove files
+	if mc.config.Verbose {
+		log.Printf("[%s] Removing old files...", ip)
+	}
+	removeCmd := fmt.Sprintf("rm -f %s /etc/systemd/system/%s.service", remoteBinary, serviceName)
+	if err := mc.execSSH(sshHost, removeCmd, "remove files"); err != nil {
+		return fmt.Errorf("[%s] remove files failed: %v", ip, err)
+	}
+	
+	// Reload systemd
+	if mc.config.Verbose {
+		log.Printf("[%s] Reloading systemd...", ip)
+	}
+	reloadCmd := "systemctl daemon-reload"
+	if err := mc.execSSH(sshHost, reloadCmd, "reload systemd"); err != nil {
+		return fmt.Errorf("[%s] reload systemd failed: %v", ip, err)
+	}
+	
+	if mc.config.Verbose {
+		log.Printf("[%s] Cleanup completed successfully", ip)
+	}
+	
+	return nil
+}
+
+// cleanup performs cleanup on all nodes concurrently
 func (mc *MeshController) cleanup() {
 	log.Println("Cleaning up mesh deployment...")
-	
-	// Stop all services via SSH using workers package
-	serviceName := "gosmesh-mesh"
 	
 	// Prepare cleanup targets
 	targets := mc.prepareDeployTargets()
 	
 	// Use workers package for concurrent cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Increased timeout for thorough cleanup
 	defer cancel()
 	
 	numWorkers := min(len(targets), 10) // Max 10 concurrent cleanups
 	results := workers.ProcessConcurrently(ctx, targets, numWorkers,
 		func(ctx context.Context, target DeployTarget) error {
-			cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", 
-				target.SSHHost, fmt.Sprintf("systemctl stop %s", serviceName))
-			return cmd.Run()
+			return mc.cleanupNode(target.IP, target.SSHHost)
 		})
 	
 	// Log cleanup results
