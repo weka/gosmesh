@@ -7,11 +7,11 @@ GosMesh is a distributed network testing tool that measures network performance 
 - **Full Mesh Testing**: Automatically establishes connections between all nodes
 - **Dual Protocol Support**: Test with both UDP and TCP
 - **Optimized for 100Gbps Networks**: Achieves 92.8 Gbps (99.2% of iperf performance)
-- **Real-time Metrics**: 
-  - Packet loss rate
-  - Round-trip time (RTT)
-  - Jitter (RTT variance)
-  - Throughput
+- **Real-time Metrics**:
+  - **Throughput** (always measured)
+  - **Packet loss rate** (only in packet mode with `--pps`)
+  - **Round-trip time (RTT)** (only in packet mode with `--pps`)
+  - **Jitter (RTT variance)** (only in packet mode with `--pps`)
 - **Smart Connection Distribution**: Automatically distributes 64 connections across mesh for optimal performance
 - **Concurrent Testing**: Multiple connections per target for stress testing
 - **Anomaly Detection**: Automatic identification of performance issues
@@ -59,6 +59,7 @@ The mesh controller automatically deploys, starts, and monitors tests across all
 --report-interval   Interval for periodic reports (default: 5s)
 --packet-size       Size of test packets (0=auto-detect, uses jumbo frames)
 --port              Port to use for testing (default: 9999)
+--pps               Packets per second per connection (0=unlimited throughput mode)
 --buffer-size       Buffer size for throughput mode (0=auto, 4MB for TCP)
 ```
 
@@ -101,26 +102,91 @@ gosmesh run --ips 172.16.0.10,172.16.0.11 --protocol udp --pps 1000
 gosmesh uninstall --ips 10.200.6.28,10.200.6.240,10.200.6.25
 ```
 
+## Measurement Modes
+
+GosMesh operates in two distinct modes that provide different types of measurements:
+
+### Throughput Mode (Default)
+**Enabled when**: No `--pps` specified or `--pps 0`
+**Purpose**: Maximum network speed measurement
+**Metrics available**:
+- ✅ **Throughput** - Maximum achievable bandwidth
+- ❌ **Packet Loss** - Not applicable (prioritizes speed over echo reliability)
+- ❌ **RTT/Jitter** - Not measured (no packet timing)
+
+**Use cases**:
+- Bandwidth testing (like iperf)
+- Performance benchmarking
+- Maximum speed validation
+
+### Packet Mode  
+**Enabled when**: `--pps X` where X > 0
+**Purpose**: Network quality and reliability measurement
+**Metrics available**:
+- ✅ **Throughput** - Based on actual packet delivery
+- ✅ **Packet Loss** - Accurate loss percentage via echo protocol
+- ✅ **RTT/Jitter** - Round-trip time statistics
+
+**Use cases**:
+- Network quality assessment
+- Latency-sensitive application testing
+- Packet loss troubleshooting
+
+### PPS (Packets Per Second) Calculation
+
+`--pps` specifies packets per second **per individual connection**. Total network load scales with mesh size:
+
+```
+Total PPS from each server = --pps × (target servers) × (connections per target)
+```
+
+**Examples**:
+- **2 servers, --pps 100**: Each server sends 100 × 1 × 64 = 6,400 pps total
+- **4 servers, --pps 50**: Each server sends 50 × 3 × 21 = 3,150 pps total
+
 ## Output
 
-### Periodic Reports
-Shows real-time statistics for each connection:
-- Packets sent/received/lost
-- Loss percentage
-- Current throughput
-- Average RTT and jitter
-- Min/Max RTT values
+### Output Format by Mode
 
-### Final Report
-Comprehensive analysis including:
-- Per-target aggregated statistics
-- Total packet counts
-- Average performance metrics
-- **Anomaly detection** highlighting:
-  - High packet loss (>5%)
-  - High latency (>100ms average RTT)
-  - High jitter (>20ms)
-  - Low throughput (<10 Mbps for TCP)
+#### Throughput Mode Output
+```bash
+=== Mesh Statistics [2025-01-15 14:30:45] ===
+Active Servers: 4/4
+
+Throughput:
+  Total: 345.67 Gbps | Avg: 86.42 Gbps
+  Best: 10.0.0.1 (92.34 Gbps) | Worst: 10.0.0.4 (78.90 Gbps)
+
+Packet Loss: Not applicable (throughput mode)
+
+RTT/Jitter: Not measured (throughput mode)
+```
+
+#### Packet Mode Output  
+```bash
+=== Mesh Statistics [2025-01-15 14:30:45] ===
+Active Servers: 4/4
+
+Throughput:
+  Total: 45.67 Gbps | Avg: 11.42 Gbps
+  Best: 10.0.0.1 (12.34 Gbps) | Worst: 10.0.0.4 (10.23 Gbps)
+
+Packet Loss:
+  Avg: 0.12% | Best: 10.0.0.2 (0.01%) | Worst: 10.0.0.3 (0.34%)
+
+Jitter:
+  Avg: 2.45 ms | Best: 10.0.0.1 (1.23 ms) | Worst: 10.0.0.4 (4.56 ms)
+
+RTT:
+  Avg: 15.67 ms | Best: 10.0.0.2 (12.34 ms) | Worst: 10.0.0.3 (18.90 ms)
+```
+
+### Anomaly Detection (Packet Mode Only)
+When using `--pps`, the system automatically detects:
+- **High packet loss** (>5%)
+- **High latency** (>100ms average RTT)  
+- **High jitter** (>20ms)
+- **Low throughput** (<10 Mbps for TCP)
 
 ## Deployment
 
@@ -151,17 +217,30 @@ Based on extensive testing, GosMesh achieves:
 
 ## Interpreting Results
 
-### Good Performance Indicators
-- Packet loss < 1%
-- RTT < 50ms (varies by network distance)
-- Jitter < 10ms
-- Consistent throughput across connections
+### Performance Indicators by Mode
+
+#### Throughput Mode
+- **High throughput**: Close to line rate (e.g., 90+ Gbps on 100G networks)
+- **Consistent performance**: Similar throughput across all servers
+- **Stable connections**: No connection drops or errors
+
+#### Packet Mode  
+- **Low packet loss**: < 1% in most networks
+- **Low latency**: RTT < 50ms (varies by distance)
+- **Low jitter**: < 10ms for stable networks
+- **Predictable performance**: Consistent metrics across connections
 
 ### Common Issues
-- **100% packet loss**: Check firewall rules or network connectivity
-- **High jitter**: Indicates network congestion or unstable path
-- **Asymmetric performance**: Different metrics to/from same node suggests routing issues
-- **Low throughput**: May indicate bandwidth limitations or TCP tuning issues
+
+#### Both Modes
+- **Low throughput**: Check bandwidth limits, CPU usage, buffer sizes
+- **Connection failures**: Verify firewall rules and port accessibility
+- **Asymmetric performance**: May indicate routing or hardware issues
+
+#### Packet Mode Only
+- **High packet loss**: Network congestion, buffer overruns, or connectivity issues
+- **High jitter**: Network instability, congestion, or competing traffic
+- **Variable RTT**: Routing changes or network congestion
 
 ## Troubleshooting
 
