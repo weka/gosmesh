@@ -238,7 +238,7 @@ func (mc *MeshController) Run() {
 		targets := mc.prepareDeployTargets()
 		
 		// Use parallel deployment with workers package
-		numWorkers := min(len(targets), 10) // Max 10 concurrent deployments
+		numWorkers := min(len(targets), 32) // Max 32 concurrent deployments
 		results := workers.ProcessConcurrentlyWithIndexes(ctx, targets, numWorkers, 
 			func(ctx context.Context, target DeployTarget, i int) error {
 				return mc.deployToNodeWithStart(target.IP, target.Index, false) // Don't start service yet
@@ -298,7 +298,7 @@ func (mc *MeshController) Run() {
 		}
 		
 		// Start all services concurrently
-		numWorkers := min(len(successfulTargets), 20) // Higher concurrency for starting
+		numWorkers := min(len(successfulTargets), 32) // Max 32 concurrent service starts
 		results := workers.ProcessConcurrentlyWithIndexes(ctx, successfulTargets, numWorkers, 
 			func(ctx context.Context, target DeployTarget, i int) error {
 				return mc.startService(target.IP, target.Index)
@@ -1124,6 +1124,105 @@ fi
 	return nil
 }
 
+// cleanupNodeWithContext performs thorough cleanup on a single node with context support
+func (mc *MeshController) cleanupNodeWithContext(ctx context.Context, ip, sshHost string) error {
+	serviceName := "gosmesh-mesh"
+	remoteBinary := "/opt/gosmesh/gosmesh"
+	
+	// Stop service if it exists
+	if mc.config.Verbose {
+		log.Printf("[%s] Stopping existing service...", ip)
+	}
+	stopCmd := fmt.Sprintf("systemctl stop %s || true", serviceName)
+	if err := mc.execSSHWithContext(ctx, sshHost, stopCmd, "stop service"); err != nil {
+		return fmt.Errorf("[%s] stop service failed: %v", ip, err)
+	}
+	
+	// Disable service if it exists
+	if mc.config.Verbose {
+		log.Printf("[%s] Disabling existing service...", ip)
+	}
+	disableCmd := fmt.Sprintf("systemctl disable %s || true", serviceName)
+	if err := mc.execSSHWithContext(ctx, sshHost, disableCmd, "disable service"); err != nil {
+		return fmt.Errorf("[%s] disable service failed: %v", ip, err)
+	}
+	
+	// Reset failed state (redirect stderr to avoid hanging)
+	if mc.config.Verbose {
+		log.Printf("[%s] Resetting failed state...", ip)
+	}
+	resetCmd := fmt.Sprintf("systemctl reset-failed %s 2>/dev/null || true", serviceName)
+	if err := mc.execSSHWithContext(ctx, sshHost, resetCmd, "reset failed state"); err != nil {
+		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
+	}
+	
+	// Kill processes running specifically from /opt/gosmesh/ path using their executable location
+	if mc.config.Verbose {
+		log.Printf("[%s] Killing processes from /opt/gosmesh...", ip)
+	}
+	killCmd := fmt.Sprintf(`
+killed=false
+for pid in $(pgrep gosmesh 2>/dev/null || true); do
+    if [ -n "$pid" ]; then
+        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
+        if [ "$exe_path" = "%s" ]; then
+            echo "Killing process $pid from %s"
+            kill $pid && echo "Killed $pid" || echo "Failed to kill $pid"
+            killed=true
+        fi
+    fi
+done
+if [ "$killed" = "false" ]; then
+    echo "No processes found from %s"
+fi
+`, remoteBinary, remoteBinary, remoteBinary)
+	if err := mc.execSSHWithContext(ctx, sshHost, killCmd, "kill processes"); err != nil {
+		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
+	}
+	
+	// Remove service file
+	if mc.config.Verbose {
+		log.Printf("[%s] Removing service file...", ip)
+	}
+	removeServiceCmd := fmt.Sprintf("rm -f /etc/systemd/system/%s.service", serviceName)
+	if err := mc.execSSHWithContext(ctx, sshHost, removeServiceCmd, "remove service file"); err != nil {
+		return fmt.Errorf("[%s] remove service file failed: %v", ip, err)
+	}
+	
+	// Remove binary
+	if mc.config.Verbose {
+		log.Printf("[%s] Removing binary...", ip)
+	}
+	removeBinaryCmd := fmt.Sprintf("rm -f %s", remoteBinary)
+	if err := mc.execSSHWithContext(ctx, sshHost, removeBinaryCmd, "remove binary"); err != nil {
+		return fmt.Errorf("[%s] remove binary failed: %v", ip, err)
+	}
+	
+	// Remove directory if empty (ignore errors)
+	cleanupDirCmd := "rmdir /opt/gosmesh 2>/dev/null || true"
+	if err := mc.execSSHWithContext(ctx, sshHost, cleanupDirCmd, "cleanup directory"); err != nil {
+		// Don't fail on directory cleanup errors
+		if mc.config.Verbose {
+			log.Printf("[%s] Warning: cleanup directory failed: %v", ip, err)
+		}
+	}
+	
+	// Reload systemd
+	if mc.config.Verbose {
+		log.Printf("[%s] Reloading systemd...", ip)
+	}
+	reloadCmd := "systemctl daemon-reload"
+	if err := mc.execSSHWithContext(ctx, sshHost, reloadCmd, "reload systemd"); err != nil {
+		return fmt.Errorf("[%s] reload systemd failed: %v", ip, err)
+	}
+	
+	if mc.config.Verbose {
+		log.Printf("[%s] Cleanup completed successfully", ip)
+	}
+	
+	return nil
+}
+
 // cleanup performs cleanup on all nodes concurrently
 func (mc *MeshController) cleanup() {
 	log.Println("Cleaning up mesh deployment...")
@@ -1131,14 +1230,16 @@ func (mc *MeshController) cleanup() {
 	// Prepare cleanup targets
 	targets := mc.prepareDeployTargets()
 	
-	// Use workers package for concurrent cleanup
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Increased timeout for thorough cleanup
-	defer cancel()
+	// Use workers package for concurrent cleanup with per-server timeout
+	ctx := context.Background()
 	
-	numWorkers := min(len(targets), 10) // Max 10 concurrent cleanups
+	numWorkers := min(len(targets), 32) // Max 32 concurrent cleanups
 	results := workers.ProcessConcurrently(ctx, targets, numWorkers,
 		func(ctx context.Context, target DeployTarget) error {
-			return mc.cleanupNode(target.IP, target.SSHHost)
+			// Create per-server timeout of 120 seconds
+			serverCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+			defer cancel()
+			return mc.cleanupNodeWithContext(serverCtx, target.IP, target.SSHHost)
 		})
 	
 	// Log cleanup results
