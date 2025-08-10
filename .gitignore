@@ -4,11 +4,11 @@
 *.dll
 *.so
 *.dylib
-gonet
-gonet_*
-gonet-*
-gonet.prof
-gonet.pgo
+gosmesh
+gosmesh_*
+gosmesh-*
+gosmesh.prof
+gosmesh.pgo
 *.pprof
 
 # Test binary, built with `go test -c`

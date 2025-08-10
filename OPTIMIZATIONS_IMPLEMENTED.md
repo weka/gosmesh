@@ -1,8 +1,8 @@
-# Performance Optimizations Implemented in GoNet
+# Performance Optimizations Implemented in GosMesh
 
 ## Overview
 
-GoNet has been enhanced with multiple performance optimizations to approach iperf/line-speed performance on 100Gbps networks. These optimizations provide a combined performance improvement of **45-75%** over the baseline implementation.
+GosMesh has been enhanced with multiple performance optimizations to approach iperf/line-speed performance on 100Gbps networks. These optimizations provide a combined performance improvement of **45-75%** over the baseline implementation.
 
 ## Implemented Optimizations
 
@@ -76,12 +76,12 @@ GoNet has been enhanced with multiple performance optimizations to approach iper
 
 ### Basic Usage (All Optimizations)
 ```bash
-./gonet --ips 10.0.0.1,10.0.0.2,10.0.0.3 --optimized
+./gosmesh --ips 10.0.0.1,10.0.0.2,10.0.0.3 --optimized
 ```
 
 ### Maximum Performance (Root Required)
 ```bash
-sudo ./gonet --ips 10.0.0.1,10.0.0.2,10.0.0.3 \
+sudo ./gosmesh --ips 10.0.0.1,10.0.0.2,10.0.0.3 \
              --optimized \
              --io-uring \
              --huge-pages \
@@ -92,7 +92,7 @@ sudo ./gonet --ips 10.0.0.1,10.0.0.2,10.0.0.3 \
 
 ### Disable Specific Optimizations
 ```bash
-./gonet --ips 10.0.0.1,10.0.0.2,10.0.0.3 \
+./gosmesh --ips 10.0.0.1,10.0.0.2,10.0.0.3 \
         --optimized=false    # Disable all optimizations
         --io-uring=false     # Disable io_uring
         --huge-pages=false   # Disable huge pages
@@ -159,9 +159,9 @@ ethtool -C eth0 adaptive-rx on adaptive-tx on
 
 ### Comparison with iperf
 - iperf TCP: 93.5 Gbps
-- GoNet TCP: 85 Gbps (91% of iperf performance)
+- GosMesh TCP: 85 Gbps (91% of iperf performance)
 - iperf UDP: 20.6 Gbps
-- GoNet UDP: 50 Gbps (243% of iperf performance)
+- GosMesh UDP: 50 Gbps (243% of iperf performance)
 
 ## Platform Support
 
@@ -219,4 +219,4 @@ ethtool -C eth0 adaptive-rx on adaptive-tx on
 
 ## Conclusion
 
-The implemented optimizations bring GoNet to **85-90%** of iperf's TCP performance and actually **exceed** iperf's UDP performance. The remaining gap to line-rate (100 Gbps) can be closed with kernel bypass technologies like AF_XDP or DPDK, which are planned for future releases.
+The implemented optimizations bring GosMesh to **85-90%** of iperf's TCP performance and actually **exceed** iperf's UDP performance. The remaining gap to line-rate (100 Gbps) can be closed with kernel bypass technologies like AF_XDP or DPDK, which are planned for future releases.

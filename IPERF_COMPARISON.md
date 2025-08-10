@@ -1,8 +1,8 @@
-# Performance Comparison: GoNet vs iperf
+# Performance Comparison: GosMesh vs iperf
 
 ## Executive Summary
 
-**iperf significantly outperforms our GoNet implementation**, achieving near wire-speed on the 100Gbit network. This reveals optimization opportunities in our implementation.
+**iperf significantly outperforms our GosMesh implementation**, achieving near wire-speed on the 100Gbit network. This reveals optimization opportunities in our implementation.
 
 ---
 
@@ -14,16 +14,16 @@
 |------|-----------|------------|-------|
 | **iperf** | h5→h11 | **93.5 Gbps** | Near wire-speed! |
 | **iperf** | h11→h5 | **90.9 Gbps** | Bidirectional works |
-| **GoNet** | h11→h5 | **4.4 Gbps** | 21x slower than iperf |
-| **GoNet** | h5→h11 | **0 Gbps** | Connection refused (firewall) |
+| **GosMesh** | h11→h5 | **4.4 Gbps** | 21x slower than iperf |
+| **GosMesh** | h5→h11 | **0 Gbps** | Connection refused (firewall) |
 
 ### UDP Performance (8 parallel connections)
 
 | Tool | Direction | Send Rate | Receive Rate | Loss |
 |------|-----------|-----------|--------------|------|
 | **iperf** | h5→h11 | 20.6 Gbps | ~20 Gbps | 1-8% |
-| **GoNet** | h11→h5 | 20.3 Gbps | 0 Gbps | 100% (firewall) |
-| **GoNet** | h5→h11 | 20.3 Gbps | ~1.5 Gbps | 83% |
+| **GosMesh** | h11→h5 | 20.3 Gbps | 0 Gbps | 100% (firewall) |
+| **GosMesh** | h5→h11 | 20.3 Gbps | ~1.5 Gbps | 83% |
 
 ---
 
@@ -43,20 +43,20 @@
 
 3. **Threading Model**
    - iperf: One thread per connection with blocking I/O
-   - GoNet: Goroutines with smaller default stack size
+   - GosMesh: Goroutines with smaller default stack size
 
-4. **TCP Specific Issues in GoNet**
+4. **TCP Specific Issues in GosMesh**
    - Not using TCP_NODELAY for latency optimization
    - Not tuning SO_SNDBUF/SO_RCVBUF socket buffers
    - Packet-based design not optimal for stream protocol
 
 5. **CPU Efficiency**
    - iperf: ~10% CPU per 10Gbps stream
-   - GoNet: ~100% CPU per 2.5Gbps stream
+   - GosMesh: ~100% CPU per 2.5Gbps stream
 
 ---
 
-## Identified Issues in GoNet
+## Identified Issues in GosMesh
 
 ### Critical Issues
 
@@ -99,7 +99,7 @@
 
 ---
 
-## Optimization Recommendations for GoNet
+## Optimization Recommendations for GosMesh
 
 ### Immediate Improvements
 
@@ -165,14 +165,14 @@ iperf -c <target> -u -P 8 -b 10G -t 10  # client
 iperf -c <target> -P 8 -w 4M  # 4MB TCP window
 ```
 
-### Equivalent GoNet Commands
+### Equivalent GosMesh Commands
 
 ```bash
 # Current implementation (suboptimal)
-./gonet --ips <targets> --protocol tcp --concurrency 8
+./gosmesh --ips <targets> --protocol tcp --concurrency 8
 
 # After optimizations (proposed)
-./gonet --ips <targets> --protocol tcp --concurrency 8 \
+./gosmesh --ips <targets> --protocol tcp --concurrency 8 \
         --buffer-size 131072 --tcp-nodelay=false
 ```
 
@@ -180,16 +180,16 @@ iperf -c <target> -P 8 -w 4M  # 4MB TCP window
 
 ## Conclusion
 
-The **21x performance gap** between iperf and GoNet for TCP reveals significant optimization opportunities:
+The **21x performance gap** between iperf and GosMesh for TCP reveals significant optimization opportunities:
 
 1. **Packet-based design is wrong for TCP** - Need streaming design
 2. **Buffer sizes too small** - Need 64-128KB writes minimum
 3. **Too many system calls** - Need batching
 4. **No socket tuning** - Need proper TCP/UDP socket options
 
-With these optimizations, GoNet should achieve at least 50-70 Gbps, closing the gap with iperf's 90+ Gbps performance.
+With these optimizations, GosMesh should achieve at least 50-70 Gbps, closing the gap with iperf's 90+ Gbps performance.
 
-The current GoNet design is more suitable for:
+The current GosMesh design is more suitable for:
 - Packet loss testing
 - Latency measurement
 - Network debugging

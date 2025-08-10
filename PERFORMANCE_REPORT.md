@@ -1,4 +1,4 @@
-# GoNet Performance Report - 100Gbit Network Testing
+# GosMesh Performance Report - 100Gbit Network Testing
 
 ## Test Environment
 - **Network**: 100Gbit InfiniBand (10.200.x.x subnet)
@@ -146,29 +146,29 @@ Configuration: --protocol tcp --pps 0 (unlimited)
 
 ### Maximum UDP Throughput Test
 ```bash
-./gonet --ips 10.200.6.28,10.200.6.240 --protocol udp --concurrency 8 --duration 30s
+./gosmesh --ips 10.200.6.28,10.200.6.240 --protocol udp --concurrency 8 --duration 30s
 ```
 
 ### Stable Bidirectional Test
 ```bash
-./gonet --ips 10.200.6.28,10.200.6.240 --pps 25000 --concurrency 4 --duration 60s
+./gosmesh --ips 10.200.6.28,10.200.6.240 --pps 25000 --concurrency 4 --duration 60s
 ```
 
 ### TCP Reliability Test
 ```bash
-./gonet --ips 10.200.6.28,10.200.6.240 --protocol tcp --concurrency 4 --duration 30s
+./gosmesh --ips 10.200.6.28,10.200.6.240 --protocol tcp --concurrency 4 --duration 30s
 ```
 
 ### Custom Packet Size Test
 ```bash
-./gonet --ips 10.200.6.28,10.200.6.240 --packet-size 9000 --pps 10000
+./gosmesh --ips 10.200.6.28,10.200.6.240 --packet-size 9000 --pps 10000
 ```
 
 ---
 
 ## Conclusion
 
-The GoNet tool successfully demonstrates:
+The GosMesh tool successfully demonstrates:
 - **20+ Gbps** throughput on 100Gbit network with UDP
 - **4+ Gbps** reliable throughput with TCP  
 - Automatic MTU detection and optimization

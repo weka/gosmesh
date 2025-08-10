@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/weka/gonet/workers"
+	"github.com/weka/gosmesh/workers"
 )
 
 type MeshConfig struct {
@@ -64,7 +64,7 @@ func MeshCommand(args []string) {
 	fs.StringVar(&config.IPs, "ips", "", "Comma-separated list of IPs for mesh deployment")
 	fs.StringVar(&config.SSHHosts, "ssh-hosts", "", "Optional: SSH hosts (user@host1,user@host2,...) - if not provided, uses root@IP")
 	fs.DurationVar(&config.Duration, "duration", 5*time.Minute, "Test duration (default: 5m)")
-	fs.IntVar(&config.Port, "port", 9999, "Port for gonet testing")
+	fs.IntVar(&config.Port, "port", 9999, "Port for gosmesh testing")
 	fs.IntVar(&config.APIPort, "api-port", 8080, "Port for API server")
 	fs.StringVar(&config.Protocol, "protocol", "tcp", "Protocol to use: udp or tcp")
 	fs.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
@@ -74,9 +74,9 @@ func MeshCommand(args []string) {
 	}
 
 	if config.IPs == "" {
-		fmt.Fprintf(os.Stderr, "Usage: gonet mesh --ips ip1,ip2,ip3 [options]\n")
+		fmt.Fprintf(os.Stderr, "Usage: gosmesh mesh --ips ip1,ip2,ip3 [options]\n")
 		fmt.Fprintf(os.Stderr, "\nExample:\n")
-		fmt.Fprintf(os.Stderr, "  gonet mesh --ips 10.200.5.55,10.200.6.240,10.200.6.28,10.200.6.25 --duration 120s\n\n")
+		fmt.Fprintf(os.Stderr, "  gosmesh mesh --ips 10.200.5.55,10.200.6.240,10.200.6.28,10.200.6.25 --duration 120s\n\n")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
@@ -434,9 +434,9 @@ func (mc *MeshController) handleServiceStartResults(results *workers.Results[Dep
 	}
 }
 
-// startService starts the gonet service on a specific node and verifies it's running
+// startService starts the gosmesh service on a specific node and verifies it's running
 func (mc *MeshController) startService(ip string, index int) error {
-	serviceName := "gonet-mesh"
+	serviceName := "gosmesh-mesh"
 	
 	// Determine SSH host
 	var sshHost string
@@ -470,7 +470,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 	verifyCmd := fmt.Sprintf(`
 		echo "[VERIFY] Quick service check..."
 		# Check if service is active and listening in one go
-		if systemctl is-active %s >/dev/null 2>&1 && pgrep -f 'gonet run' >/dev/null 2>&1 && ss -tln | grep ':%d ' >/dev/null 2>&1; then
+		if systemctl is-active %s >/dev/null 2>&1 && pgrep -f 'gosmesh run' >/dev/null 2>&1 && ss -tln | grep ':%d ' >/dev/null 2>&1; then
 			echo "[SUCCESS] Service active, process running, port listening"
 			exit 0
 		fi
@@ -478,7 +478,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 		# If verification failed, show why
 		echo "[ERROR] Service verification failed"
 		echo "Service active: $(systemctl is-active %s 2>/dev/null || echo 'inactive')"
-		echo "Process running: $(pgrep -f 'gonet run' >/dev/null 2>&1 && echo 'yes' || echo 'no')"
+		echo "Process running: $(pgrep -f 'gosmesh run' >/dev/null 2>&1 && echo 'yes' || echo 'no')"
 		echo "Port listening: $(ss -tln | grep ':%d ' >/dev/null 2>&1 && echo 'yes' || echo 'no')"
 		
 		echo "Recent logs:"
@@ -610,9 +610,9 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 		log.Printf("[%s] Starting deployment", ip)
 	}
 	
-	serviceName := "gonet-mesh"
-	remoteDir := "/opt/gonet"
-	remoteBinary := filepath.Join(remoteDir, "gonet")
+	serviceName := "gosmesh-mesh"
+	remoteDir := "/opt/gosmesh"
+	remoteBinary := filepath.Join(remoteDir, "gosmesh")
 	
 	// Get the path of the currently executing binary
 	currentBinary, err := os.Executable()
@@ -675,12 +675,12 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
 	}
 	
-	// Kill processes running specifically from /opt/gonet/ path using their executable location
+	// Kill processes running specifically from /opt/gosmesh/ path using their executable location
 	if mc.config.Verbose {
-		log.Printf("[%s] Finding processes running from /opt/gonet...", ip)
+		log.Printf("[%s] Finding processes running from /opt/gosmesh...", ip)
 	}
 	findCmd := fmt.Sprintf(`
-for pid in $(pgrep gonet 2>/dev/null || true); do
+for pid in $(pgrep gosmesh 2>/dev/null || true); do
     if [ -n "$pid" ]; then
         exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
         if [ "$exe_path" = "%s" ]; then
@@ -689,16 +689,16 @@ for pid in $(pgrep gonet 2>/dev/null || true); do
     fi
 done
 `, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, findCmd, "find /opt/gonet processes"); err != nil {
+	if err := mc.execSSH(sshHost, findCmd, "find /opt/gosmesh processes"); err != nil {
 		return fmt.Errorf("[%s] find processes failed: %v", ip, err)
 	}
 	
 	if mc.config.Verbose {
-		log.Printf("[%s] Killing processes from /opt/gonet...", ip)
+		log.Printf("[%s] Killing processes from /opt/gosmesh...", ip)
 	}
 	killCmd := fmt.Sprintf(`
 killed=false
-for pid in $(pgrep gonet 2>/dev/null || true); do
+for pid in $(pgrep gosmesh 2>/dev/null || true); do
     if [ -n "$pid" ]; then
         exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
         if [ "$exe_path" = "%s" ]; then
@@ -709,19 +709,19 @@ for pid in $(pgrep gonet 2>/dev/null || true); do
     fi
 done
 if [ "$killed" = "false" ]; then
-    echo "No processes from /opt/gonet to kill"
+    echo "No processes from /opt/gosmesh to kill"
 fi
 `, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, killCmd, "kill /opt/gonet processes"); err != nil {
+	if err := mc.execSSH(sshHost, killCmd, "kill /opt/gosmesh processes"); err != nil {
 		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
 	}
 	
 	if mc.config.Verbose {
-		log.Printf("[%s] Force killing any remaining processes from /opt/gonet...", ip)
+		log.Printf("[%s] Force killing any remaining processes from /opt/gosmesh...", ip)
 	}
 	forceKillCmd := fmt.Sprintf(`
 killed=false
-for pid in $(pgrep gonet 2>/dev/null || true); do
+for pid in $(pgrep gosmesh 2>/dev/null || true); do
     if [ -n "$pid" ]; then
         exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
         if [ "$exe_path" = "%s" ]; then
@@ -732,10 +732,10 @@ for pid in $(pgrep gonet 2>/dev/null || true); do
     fi
 done
 if [ "$killed" = "false" ]; then
-    echo "No processes from /opt/gonet to force kill"
+    echo "No processes from /opt/gosmesh to force kill"
 fi
 `, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, forceKillCmd, "force kill /opt/gonet processes"); err != nil {
+	if err := mc.execSSH(sshHost, forceKillCmd, "force kill /opt/gosmesh processes"); err != nil {
 		return fmt.Errorf("[%s] force kill processes failed: %v", ip, err)
 	}
 	
@@ -790,7 +790,7 @@ fi
 		log.Printf("[%s] Creating systemd service...", ip)
 	}
 	serviceContent := mc.generateSystemdUnit(remoteBinary)
-	serviceTempPath := fmt.Sprintf("/tmp/gonet-mesh-%s.service", strings.ReplaceAll(ip, ".", "_"))
+	serviceTempPath := fmt.Sprintf("/tmp/gosmesh-mesh-%s.service", strings.ReplaceAll(ip, ".", "_"))
 	if err := os.WriteFile(serviceTempPath, []byte(serviceContent), 0644); err != nil {
 		return fmt.Errorf("[%s] failed to write service file: %v", ip, err)
 	}
@@ -812,7 +812,7 @@ fi
 	// Step 7: Start service (optional)
 	if startService {
 		if mc.config.Verbose {
-			log.Printf("[%s] Starting gonet service...", ip)
+			log.Printf("[%s] Starting gosmesh service...", ip)
 		}
 		if err := mc.execSSH(sshHost, fmt.Sprintf("systemctl start %s", serviceName), "start service"); err != nil {
 			return fmt.Errorf("[%s] %v", ip, err)
@@ -960,7 +960,7 @@ func (mc *MeshController) cleanup() {
 	log.Println("Cleaning up mesh deployment...")
 	
 	// Stop all services via SSH using workers package
-	serviceName := "gonet-mesh"
+	serviceName := "gosmesh-mesh"
 	
 	// Prepare cleanup targets
 	targets := mc.prepareDeployTargets()

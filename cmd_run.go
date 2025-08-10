@@ -81,7 +81,7 @@ func RunCommand(args []string) {
 	}
 
 	if config.IPs == "" {
-		fmt.Fprintf(os.Stderr, "Usage: gonet run --ips ip1,ip2,ip3 [options]\n")
+		fmt.Fprintf(os.Stderr, "Usage: gosmesh run --ips ip1,ip2,ip3 [options]\n")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
@@ -147,7 +147,7 @@ func runWithConfig(config *RunConfig) {
 		}
 	}
 
-	log.Printf("Starting gonet run mode")
+	log.Printf("Starting gosmesh run mode")
 	log.Printf("Local IP: %s", localIP)
 	log.Printf("Protocol: %s", config.Protocol)
 	log.Printf("Duration: %v", config.Duration)

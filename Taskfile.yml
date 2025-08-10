@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: gonet
+  BINARY_NAME: gosmesh
   BUILD_DIR: .temp
   GO_FILES:
     sh: find . -name '*.go' -not -path "./vendor/*"

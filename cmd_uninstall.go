@@ -27,7 +27,7 @@ func UninstallCommand(args []string) {
 	}
 
 	if config.IPs == "" {
-		fmt.Fprintf(os.Stderr, "Usage: gonet uninstall --ips ip1,ip2,ip3\n")
+		fmt.Fprintf(os.Stderr, "Usage: gosmesh uninstall --ips ip1,ip2,ip3\n")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
@@ -89,8 +89,8 @@ func (u *Uninstaller) Run() {
 }
 
 func (u *Uninstaller) uninstallFromNode(ip string, index int) error {
-	serviceName := "gonet-mesh"
-	remoteDir := "/opt/gonet"
+	serviceName := "gosmesh-mesh"
+	remoteDir := "/opt/gosmesh"
 
 	if ip == u.localIP {
 		// Uninstall locally

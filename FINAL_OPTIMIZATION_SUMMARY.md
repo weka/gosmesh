@@ -1,4 +1,4 @@
-# GoNet Final Optimization Summary
+# GosMesh Final Optimization Summary
 
 ## Achieved Optimizations for 100Gbps Networks
 
@@ -23,7 +23,7 @@
 
 ```bash
 # Optimized for 100Gbps networks
-./gonet-linux \
+./gosmesh-linux \
   --ips <targets> \
   --protocol tcp \
   --concurrency 8 \
@@ -36,6 +36,6 @@
 - `connection.go`: Core optimizations, buffer management
 - `connection_optimized.go`: Linux-specific zero-copy, sendmmsg
 - `deploy_test.sh`: Deployment script with kernel tuning
-- `gonet-linux`: Optimized binary for Linux
+- `gosmesh-linux`: Optimized binary for Linux
 
 The system is now optimized for high-performance 100Gbps+ networks while maintaining the ability to do detailed packet-level analysis when needed.

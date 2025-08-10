@@ -31,26 +31,26 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `GoNet - High-Performance Network Testing Tool
+	fmt.Fprintf(os.Stderr, `GosMesh - High-Performance Network Testing Tool
 
 Usage:
-  gonet <command> [options]
+  gosmesh <command> [options]
 
 Commands:
   run        Run network test directly (used by systemd)
   mesh       Deploy and orchestrate mesh testing across multiple nodes
-  uninstall  Remove gonet deployment from specified nodes
+  uninstall  Remove gosmesh deployment from specified nodes
 
 Examples:
   # Run test directly on nodes
-  gonet run --ips 10.0.0.1,10.0.0.2,10.0.0.3 --duration 5m
+  gosmesh run --ips 10.0.0.1,10.0.0.2,10.0.0.3 --duration 5m
 
   # Deploy mesh test from single controller
-  gonet mesh --ips 10.0.0.1,10.0.0.2,10.0.0.3 --duration 5m
+  gosmesh mesh --ips 10.0.0.1,10.0.0.2,10.0.0.3 --duration 5m
 
   # Clean up deployment
-  gonet uninstall --ips 10.0.0.1,10.0.0.2,10.0.0.3
+  gosmesh uninstall --ips 10.0.0.1,10.0.0.2,10.0.0.3
 
-Use "gonet <command> --help" for more information about a command.
+Use "gosmesh <command> --help" for more information about a command.
 `)
 }

@@ -1,6 +1,6 @@
-# GoNet - Network Performance Testing Tool
+# GosMesh - Network Performance Testing Tool
 
-GoNet is a distributed network testing tool that measures network performance metrics in a full mesh topology. It supports both UDP and TCP protocols and provides comprehensive reporting with anomaly detection.
+GosMesh is a distributed network testing tool that measures network performance metrics in a full mesh topology. It supports both UDP and TCP protocols and provides comprehensive reporting with anomaly detection.
 
 ## Features
 
@@ -20,7 +20,7 @@ GoNet is a distributed network testing tool that measures network performance me
 ## Installation
 
 ```bash
-go build -o gonet
+go build -o gosmesh
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ go build -o gonet
 ### Basic Usage
 
 ```bash
-./gonet --ips ip1,ip2,ip3
+./gosmesh --ips ip1,ip2,ip3
 ```
 
 Each server should be started with the same IP list. The tool automatically detects which IP belongs to the local machine and uses it as the listening address.
@@ -52,24 +52,24 @@ Each server should be started with the same IP list. The tool automatically dete
 #### High-Performance 2-node test (100Gbps networks)
 ```bash
 # Each node will use 64 connections to the other
-./gonet --ips 10.200.6.28,10.200.6.240
+./gosmesh --ips 10.200.6.28,10.200.6.240
 ```
 
 #### 3-node full mesh test
 ```bash
 # Each node connects to 2 others with 32 connections each (64 total)
-./gonet --ips 192.168.1.10,192.168.1.11,192.168.1.12
+./gosmesh --ips 192.168.1.10,192.168.1.11,192.168.1.12
 ```
 
 #### 4-node mesh with custom connection count
 ```bash
 # Use 128 total connections (32 per target)
-./gonet --ips 10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4 --total-connections 128
+./gosmesh --ips 10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4 --total-connections 128
 ```
 
 #### UDP test with packet rate limiting
 ```bash
-./gonet --ips 172.16.0.10,172.16.0.11 --protocol udp --pps 1000
+./gosmesh --ips 172.16.0.10,172.16.0.11 --protocol udp --pps 1000
 ```
 
 ## Output
@@ -102,7 +102,7 @@ Comprehensive analysis including:
 
 ## Performance on 100Gbps Networks
 
-Based on extensive testing, GoNet achieves:
+Based on extensive testing, GosMesh achieves:
 - **92.8 Gbps** with 64 connections (99.2% of iperf baseline)
 - **75.6 Gbps** with 32 connections
 - **47.5 Gbps** with 16 connections

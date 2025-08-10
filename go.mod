@@ -1,4 +1,4 @@
-module github.com/weka/gonet
+module github.com/weka/gosmesh
 
 go 1.24.3
 

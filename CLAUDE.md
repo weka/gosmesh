@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Development Assistant Guide
 
 ## Project Overview
-GoNet is a network testing tool designed to measure network performance metrics (jitter, packet loss, throughput) in a full mesh topology. It supports both UDP and TCP protocols and provides real-time and final reports with anomaly detection.
+GosMesh is a network testing tool designed to measure network performance metrics (jitter, packet loss, throughput) in a full mesh topology. It supports both UDP and TCP protocols and provides real-time and final reports with anomaly detection.
 
 ## Architecture
 
@@ -67,7 +67,7 @@ task build
 task test-local
 
 # Or manually (note: binary is in .temp/ directory)
-./.temp/gonet --ips <ip1>,<ip2>,<ip3> --duration 30s --concurrency 2
+./.temp/gosmesh --ips <ip1>,<ip2>,<ip3> --duration 30s --concurrency 2
 ```
 
 For multi-node testing:

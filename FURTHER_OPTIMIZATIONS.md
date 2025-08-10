@@ -4,10 +4,10 @@
 
 ### Latest Test Results on 100Gbps Network (10.200.6.28 ↔ 10.200.6.240)
 - **iperf TCP baseline**: 93.5 Gbps (8 threads)
-- **GoNet TCP 8 connections**: 24.0 Gbps (26% of iperf)
-- **GoNet TCP 16 connections**: 40.2 Gbps (43% of iperf)
-- **GoNet TCP 16 connections + optimizations**: 47.5 Gbps (51% of iperf)
-- **GoNet TCP 32 connections + optimizations**: 75.6 Gbps (81% of iperf)
+- **GosMesh TCP 8 connections**: 24.0 Gbps (26% of iperf)
+- **GosMesh TCP 16 connections**: 40.2 Gbps (43% of iperf)
+- **GosMesh TCP 16 connections + optimizations**: 47.5 Gbps (51% of iperf)
+- **GosMesh TCP 32 connections + optimizations**: 75.6 Gbps (81% of iperf)
 - **Line Rate**: 100 Gbps
 - **Remaining Gap**: 18-24 Gbps for TCP
 
@@ -25,31 +25,31 @@
 #### Test These Parameters
 ```bash
 # Socket buffer sizes - test progressively
-./gonet --buffer-size=4194304   # 4MB buffers
-./gonet --buffer-size=8388608   # 8MB buffers
-./gonet --buffer-size=16777216  # 16MB buffers
-./gonet --buffer-size=33554432  # 32MB buffers
-./gonet --buffer-size=67108864  # 64MB buffers
+./gosmesh --buffer-size=4194304   # 4MB buffers
+./gosmesh --buffer-size=8388608   # 8MB buffers
+./gosmesh --buffer-size=16777216  # 16MB buffers
+./gosmesh --buffer-size=33554432  # 32MB buffers
+./gosmesh --buffer-size=67108864  # 64MB buffers
 
 # Concurrency tuning - find sweet spot
-./gonet --concurrency=1   # Single connection baseline
-./gonet --concurrency=2   # Minimal contention
-./gonet --concurrency=4   # Balance
-./gonet --concurrency=8   # Default
-./gonet --concurrency=16  # High parallelism
-./gonet --concurrency=32  # Maximum (may cause contention)
-./gonet --concurrency=64  # Extreme (likely degraded performance)
+./gosmesh --concurrency=1   # Single connection baseline
+./gosmesh --concurrency=2   # Minimal contention
+./gosmesh --concurrency=4   # Balance
+./gosmesh --concurrency=8   # Default
+./gosmesh --concurrency=16  # High parallelism
+./gosmesh --concurrency=32  # Maximum (may cause contention)
+./gosmesh --concurrency=64  # Extreme (likely degraded performance)
 
 # TCP-specific optimizations
-./gonet --tcp-nodelay=false --tcp-cork  # Batching for throughput
-./gonet --tcp-quickack --tcp-defer-accept  # Reduce handshake overhead
+./gosmesh --tcp-nodelay=false --tcp-cork  # Batching for throughput
+./gosmesh --tcp-quickack --tcp-defer-accept  # Reduce handshake overhead
 
 # Packet size optimization (jumbo frames)
-./gonet --packet-size=1500   # Standard MTU
-./gonet --packet-size=4096   # Medium jumbo
-./gonet --packet-size=9000   # Standard jumbo
-./gonet --packet-size=16384  # Large jumbo
-./gonet --packet-size=65535  # Maximum
+./gosmesh --packet-size=1500   # Standard MTU
+./gosmesh --packet-size=4096   # Medium jumbo
+./gosmesh --packet-size=9000   # Standard jumbo
+./gosmesh --packet-size=16384  # Large jumbo
+./gosmesh --packet-size=65535  # Maximum
 ```
 
 #### Kernel Parameters to Test
@@ -78,9 +78,9 @@ ethtool -G eth0 rx 4096 tx 4096  # Maximum ring buffers
 #### NUMA Optimization Testing
 ```bash
 # Test NUMA node binding
-numactl --cpunodebind=0 --membind=0 ./gonet  # Node 0
-numactl --cpunodebind=1 --membind=1 ./gonet  # Node 1
-numactl --interleave=all ./gonet  # Interleaved memory
+numactl --cpunodebind=0 --membind=0 ./gosmesh  # Node 0
+numactl --cpunodebind=1 --membind=1 ./gosmesh  # Node 1
+numactl --interleave=all ./gosmesh  # Interleaved memory
 
 # CPU frequency scaling
 cpupower frequency-set -u 5GHz  # Maximum frequency
@@ -100,12 +100,12 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 
 # 1GB huge pages (better than 2MB for very large buffers)
 echo 16 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
-./gonet --huge-page-size=1GB
+./gosmesh --huge-page-size=1GB
 
 # Test with different arena sizes
-./gonet --memory-arena-size=256MB
-./gonet --memory-arena-size=1GB
-./gonet --memory-arena-size=4GB
+./gosmesh --memory-arena-size=256MB
+./gosmesh --memory-arena-size=1GB
+./gosmesh --memory-arena-size=4GB
 ```
 
 ### 3. Advanced Networking Features (10-20% gain)
@@ -133,10 +133,10 @@ ethtool -N eth0 flow-type tcp4 dst-port 9999 action 0  # Pin to queue 0
 ethtool -L eth0 combined 32  # Maximum queues
 
 # Test with different queue counts
-./gonet --num-queues=1   # Single queue
-./gonet --num-queues=4   # Few queues
-./gonet --num-queues=16  # Many queues
-./gonet --num-queues=32  # Maximum
+./gosmesh --num-queues=1   # Single queue
+./gosmesh --num-queues=4   # Few queues
+./gosmesh --num-queues=16  # Many queues
+./gosmesh --num-queues=32  # Maximum
 
 # RSS configuration
 ethtool -X eth0 equal 16  # Distribute equally across 16 queues
@@ -148,20 +148,20 @@ ethtool -X eth0 weight 4 4 2 2 1 1 1 1  # Weighted distribution
 #### AF_XDP Socket Modes to Test
 ```go
 // Copy mode (easier, 20% gain)
-./gonet --af-xdp --xdp-mode=copy
+./gosmesh --af-xdp --xdp-mode=copy
 
 // Zero-copy mode (harder, 30% gain)  
-./gonet --af-xdp --xdp-mode=zerocopy
+./gosmesh --af-xdp --xdp-mode=zerocopy
 
 // Driver mode selection
-./gonet --af-xdp --xdp-attach=native  # Best performance
-./gonet --af-xdp --xdp-attach=generic  # Compatibility mode
-./gonet --af-xdp --xdp-attach=offload  # Hardware offload
+./gosmesh --af-xdp --xdp-attach=native  # Best performance
+./gosmesh --af-xdp --xdp-attach=generic  # Compatibility mode
+./gosmesh --af-xdp --xdp-attach=offload  # Hardware offload
 
 // Queue configuration
-./gonet --af-xdp --xdp-queues=1   # Single queue
-./gonet --af-xdp --xdp-queues=4   # Multi-queue
-./gonet --af-xdp --xdp-batch=64   # Batch size
+./gosmesh --af-xdp --xdp-queues=1   # Single queue
+./gosmesh --af-xdp --xdp-queues=4   # Multi-queue
+./gosmesh --af-xdp --xdp-batch=64   # Batch size
 ```
 
 ### 5. SIMD/Vectorization (10% gain potential)
@@ -181,10 +181,10 @@ func checksumAVX2(data []byte) uint16
 func processPacketBatchAVX512(packets [][]byte)
 
 // Test with different instruction sets
-./gonet --simd=none     # Baseline
-./gonet --simd=sse4     # SSE4
-./gonet --simd=avx2     # AVX2
-./gonet --simd=avx512   # AVX-512
+./gosmesh --simd=none     # Baseline
+./gosmesh --simd=sse4     # SSE4
+./gosmesh --simd=avx2     # AVX2
+./gosmesh --simd=avx512   # AVX-512
 ```
 
 ### 6. Batch Processing Optimizations (5-10% gain)
@@ -192,20 +192,20 @@ func processPacketBatchAVX512(packets [][]byte)
 #### Batching Parameters
 ```bash
 # Send batching
-./gonet --send-batch-size=1     # No batching
-./gonet --send-batch-size=16    # Small batch
-./gonet --send-batch-size=64    # Medium batch
-./gonet --send-batch-size=256   # Large batch
-./gonet --send-batch-size=1024  # Very large batch
+./gosmesh --send-batch-size=1     # No batching
+./gosmesh --send-batch-size=16    # Small batch
+./gosmesh --send-batch-size=64    # Medium batch
+./gosmesh --send-batch-size=256   # Large batch
+./gosmesh --send-batch-size=1024  # Very large batch
 
 # Receive batching
-./gonet --recv-batch-size=64
-./gonet --recv-batch-timeout=100us  # Batch timeout
+./gosmesh --recv-batch-size=64
+./gosmesh --recv-batch-timeout=100us  # Batch timeout
 
 # Syscall batching with io_uring
-./gonet --io-uring-sq-size=128   # Submission queue size
-./gonet --io-uring-cq-size=256   # Completion queue size
-./gonet --io-uring-batch=32      # Batch submissions
+./gosmesh --io-uring-sq-size=128   # Submission queue size
+./gosmesh --io-uring-cq-size=256   # Completion queue size
+./gosmesh --io-uring-batch=32      # Batch submissions
 ```
 
 ### 7. Lock-Free Data Structures (5% gain)
@@ -220,14 +220,14 @@ type LockFreeRing struct {
 }
 
 // Test different ring sizes
-./gonet --ring-size=256
-./gonet --ring-size=1024  
-./gonet --ring-size=4096
-./gonet --ring-size=16384
+./gosmesh --ring-size=256
+./gosmesh --ring-size=1024  
+./gosmesh --ring-size=4096
+./gosmesh --ring-size=16384
 
 // MPMC vs SPSC queues
-./gonet --queue-type=mpmc  # Multi-producer multi-consumer
-./gonet --queue-type=spsc  # Single-producer single-consumer
+./gosmesh --queue-type=mpmc  # Multi-producer multi-consumer
+./gosmesh --queue-type=spsc  # Single-producer single-consumer
 ```
 
 ### 8. Profile-Guided Optimization (5% gain)
@@ -235,16 +235,16 @@ type LockFreeRing struct {
 #### PGO Build Process
 ```bash
 # Step 1: Build with profiling
-go build -o gonet.prof -buildmode=exe -ldflags="-cpuprofile=cpu.pprof"
+go build -o gosmesh.prof -buildmode=exe -ldflags="-cpuprofile=cpu.pprof"
 
 # Step 2: Run representative workload
-./gonet.prof --ips 10.0.0.1,10.0.0.2 --duration 60s
+./gosmesh.prof --ips 10.0.0.1,10.0.0.2 --duration 60s
 
 # Step 3: Build with PGO
-go build -pgo=cpu.pprof -o gonet.pgo
+go build -pgo=cpu.pprof -o gosmesh.pgo
 
 # Compare performance
-./gonet vs ./gonet.pgo
+./gosmesh vs ./gosmesh.pgo
 ```
 
 ### 9. Network Flow Optimization (5-10% gain)
@@ -261,10 +261,10 @@ ethtool -K eth0 hw-tc-offload on
 tc qdisc add dev eth0 root mqprio num_tc 4
 
 # Busy polling parameters
-./gonet --busy-poll-usecs=0    # Disabled
-./gonet --busy-poll-usecs=50   # 50 microseconds
-./gonet --busy-poll-usecs=100  # 100 microseconds
-./gonet --busy-poll-budget=64  # Packets per poll
+./gosmesh --busy-poll-usecs=0    # Disabled
+./gosmesh --busy-poll-usecs=50   # 50 microseconds
+./gosmesh --busy-poll-usecs=100  # 100 microseconds
+./gosmesh --busy-poll-budget=64  # Packets per poll
 ```
 
 ### 10. Alternative Protocols (Variable gain)
@@ -272,18 +272,18 @@ tc qdisc add dev eth0 root mqprio num_tc 4
 #### QUIC Implementation
 ```bash
 # Test QUIC vs TCP
-./gonet --protocol=quic --quic-streams=1
-./gonet --protocol=quic --quic-streams=10
-./gonet --protocol=quic --quic-streams=100
+./gosmesh --protocol=quic --quic-streams=1
+./gosmesh --protocol=quic --quic-streams=10
+./gosmesh --protocol=quic --quic-streams=100
 
 # 0-RTT optimization
-./gonet --protocol=quic --quic-0rtt
+./gosmesh --protocol=quic --quic-0rtt
 ```
 
 #### Raw Sockets
 ```bash
 # Bypass TCP/UDP stack entirely
-./gonet --protocol=raw --raw-protocol=253  # Custom protocol
+./gosmesh --protocol=raw --raw-protocol=253  # Custom protocol
 ```
 
 ## Benchmark Testing Matrix
@@ -303,7 +303,7 @@ for buf in "${BUFFER_SIZES[@]}"; do
     for pkt in "${PACKET_SIZES[@]}"; do
       for batch in "${BATCH_SIZES[@]}"; do
         echo "Testing: buf=$buf conc=$conc pkt=$pkt batch=$batch"
-        ./gonet --buffer-size=$buf --concurrency=$conc \
+        ./gosmesh --buffer-size=$buf --concurrency=$conc \
                 --packet-size=$pkt --send-batch-size=$batch \
                 --duration=10s --ips=10.0.0.1,10.0.0.2 \
                 >> results.csv
@@ -362,19 +362,19 @@ done
 ### Key Metrics to Track
 ```bash
 # Per-packet CPU cycles
-perf stat -e cycles:u,instructions:u ./gonet
+perf stat -e cycles:u,instructions:u ./gosmesh
 
 # Cache misses
-perf stat -e cache-misses,cache-references ./gonet
+perf stat -e cache-misses,cache-references ./gosmesh
 
 # Context switches
-perf stat -e context-switches,cpu-migrations ./gonet
+perf stat -e context-switches,cpu-migrations ./gosmesh
 
 # Syscall overhead
-strace -c ./gonet
+strace -c ./gosmesh
 
 # Lock contention
-perf lock record ./gonet
+perf lock record ./gosmesh
 perf lock report
 
 # Memory bandwidth
@@ -405,7 +405,7 @@ cat /proc/interrupts | grep eth0
 ## Conclusion
 
 ### Mission Accomplished! 🎉
-**GoNet achieves 92.8 Gbps (99.2% of iperf) with 64 connections!**
+**GosMesh achieves 92.8 Gbps (99.2% of iperf) with 64 connections!**
 
 ### Key Success Factors
 1. **Connection parallelism** - 64 parallel TCP connections overcome per-connection limitations
@@ -425,4 +425,4 @@ cat /proc/interrupts | grep eth0
 - Bottleneck shifts from CPU to syscall overhead at scale
 - Linear scaling up to 64 connections shows no contention issues
 
-The gonet tool now successfully demonstrates that Go can achieve near-line-rate performance on 100Gbps networks when properly configured.
+The gosmesh tool now successfully demonstrates that Go can achieve near-line-rate performance on 100Gbps networks when properly configured.

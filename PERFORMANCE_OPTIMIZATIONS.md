@@ -1,4 +1,4 @@
-# GoNet Performance Optimizations
+# GosMesh Performance Optimizations
 
 ## Summary
 Implemented comprehensive performance optimizations to close the 21x performance gap with iperf, focusing on TCP socket tuning, buffer management, and throughput-oriented design.
@@ -62,28 +62,28 @@ Implemented comprehensive performance optimizations to close the 21x performance
 ### Maximum Throughput Testing (like iperf)
 ```bash
 # TCP throughput test (optimized mode)
-./gonet --ips <targets> --protocol tcp --concurrency 8 --pps 0
+./gosmesh --ips <targets> --protocol tcp --concurrency 8 --pps 0
 
 # UDP throughput test
-./gonet --ips <targets> --protocol udp --concurrency 8 --pps 0
+./gosmesh --ips <targets> --protocol udp --concurrency 8 --pps 0
 ```
 
 ### Packet Loss and Latency Testing
 ```bash
 # Precise packet mode with RTT measurements
-./gonet --ips <targets> --protocol tcp --concurrency 2 --pps 100
+./gosmesh --ips <targets> --protocol tcp --concurrency 2 --pps 100
 
 # Custom buffer size
-./gonet --ips <targets> --protocol tcp --pps 0 --buffer-size 262144
+./gosmesh --ips <targets> --protocol tcp --pps 0 --buffer-size 262144
 ```
 
 ### Fine-Tuning Options
 ```bash
 # Enable TCP_NODELAY for low latency
-./gonet --ips <targets> --protocol tcp --tcp-nodelay
+./gosmesh --ips <targets> --protocol tcp --tcp-nodelay
 
 # Custom throughput mode with specific buffer
-./gonet --ips <targets> --throughput-mode --buffer-size 524288
+./gosmesh --ips <targets> --throughput-mode --buffer-size 524288
 ```
 
 ## Technical Details
@@ -116,8 +116,8 @@ tcpConn.SetNoDelay(true)         // Disable Nagle's
    # Run iperf server
    iperf -s
    
-   # Run gonet in throughput mode
-   ./gonet --ips <server> --protocol tcp --concurrency 8 --pps 0
+   # Run gosmesh in throughput mode
+   ./gosmesh --ips <server> --protocol tcp --concurrency 8 --pps 0
    
    # Compare with iperf client
    iperf -c <server> -P 8 -t 10
@@ -126,7 +126,7 @@ tcpConn.SetNoDelay(true)         // Disable Nagle's
 2. **Monitor CPU usage**:
    ```bash
    # During test execution
-   top -p $(pgrep gonet)
+   top -p $(pgrep gosmesh)
    ```
 
 3. **Check network utilization**:
@@ -156,4 +156,4 @@ tcpConn.SetNoDelay(true)         // Disable Nagle's
 
 ## Conclusion
 
-These optimizations bring GoNet significantly closer to iperf's performance while maintaining its unique capabilities for packet-level metrics and full-mesh testing. The dual-mode design allows users to choose between maximum throughput (competing with iperf) or precise packet metrics (unique to GoNet).
+These optimizations bring GosMesh significantly closer to iperf's performance while maintaining its unique capabilities for packet-level metrics and full-mesh testing. The dual-mode design allows users to choose between maximum throughput (competing with iperf) or precise packet metrics (unique to GoNet).
