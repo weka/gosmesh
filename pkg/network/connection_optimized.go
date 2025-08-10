@@ -1,4 +1,4 @@
-// +build linux
+//go:build linux
 
 package network
 
@@ -55,6 +55,32 @@ type OptimizedConnection struct {
 	
 	// Socket FD for advanced operations
 	socketFD       int
+}
+
+// NewOptimizedConnection creates a new optimized connection with advanced Linux features
+func NewOptimizedConnection(localIP, targetIP string, port int, protocol string, packetSize, pps, id int) *OptimizedConnection {
+	// Create the base connection first
+	baseConn := NewConnection(localIP, targetIP, port, protocol, packetSize, pps, id)
+	
+	// Create optimized connection that embeds the base connection
+	optimized := &OptimizedConnection{
+		Connection:   baseConn,
+		useSendfile:  false, // Will be enabled after connection establishment
+		useZeroCopy:  false, // Will be enabled after connection establishment
+		statsRing:    NewRingBuffer(4096), // 4K samples ring buffer
+		NumWorkers:   4, // Default to 4 workers per connection
+		tcpMSS:       9000, // Jumbo frame MSS
+		TCPCork:      false, // Will be set based on configuration
+		socketFD:     -1, // Will be set after connection establishment
+	}
+	
+	return optimized
+}
+
+// applyOptimizedTCPOptions applies Linux-specific TCP optimizations
+func (c *Connection) applyOptimizedTCPOptions(tcpConn *net.TCPConn) error {
+	// Use the existing SetTCPOptions function for Linux optimizations
+	return SetTCPOptions(tcpConn, true)
 }
 
 // RingBuffer for lock-free statistics updates

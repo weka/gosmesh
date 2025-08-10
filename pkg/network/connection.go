@@ -43,6 +43,33 @@ var (
 	}
 )
 
+// getOptimalBufferPool selects the best buffer pool based on size and optimization mode
+func getOptimalBufferPool(size int, useOptimized bool) (bufPtr *[]byte, poolPut func(interface{})) {
+	if useOptimized {
+		// In optimized mode, prefer larger buffers for maximum throughput
+		if size <= 65536 {
+			bufPtr = largeBufferPool.Get().(*[]byte)  // Use 4MB instead of 64KB
+			poolPut = largeBufferPool.Put
+		} else {
+			bufPtr = jumboBufferPool.Get().(*[]byte)  // Use 128MB for large sizes
+			poolPut = jumboBufferPool.Put
+		}
+	} else {
+		// Standard mode - use size-appropriate pools
+		if size <= 65536 {
+			bufPtr = mediumBufferPool.Get().(*[]byte)
+			poolPut = mediumBufferPool.Put
+		} else if size <= 4194304 {
+			bufPtr = largeBufferPool.Get().(*[]byte)
+			poolPut = largeBufferPool.Put
+		} else {
+			bufPtr = jumboBufferPool.Get().(*[]byte)
+			poolPut = jumboBufferPool.Put
+		}
+	}
+	return
+}
+
 type ConnectionStats struct {
 	PacketsSent     int64
 	PacketsReceived int64
@@ -77,6 +104,7 @@ type Connection struct {
 	TCPQuickAck    bool
 	TCPNoDelay     bool
 	BusyPollUsecs  int
+	UseOptimized   bool  // Enable Linux-specific optimizations
 	
 	conn       net.Conn
 	tcpConn    *net.TCPConn  // New: keep TCP conn for socket options
@@ -138,6 +166,13 @@ func NewConnection(localIP, targetIP string, port int, protocol string, packetSi
 func (c *Connection) Start(ctx context.Context) error {
 	c.startTime = time.Now()
 	
+	// Log optimization status for debugging
+	if c.UseOptimized {
+		log.Printf("Connection %d->%s: Using optimized mode", c.ID, c.TargetIP)
+	} else {
+		log.Printf("Connection %d->%s: Using standard mode", c.ID, c.TargetIP)
+	}
+	
 	// Start periodic stats updater for throughput mode
 	if c.throughputMode {
 		go c.periodicStatsUpdater(ctx)
@@ -187,6 +222,15 @@ func (c *Connection) startTCP(ctx context.Context) error {
 	// Configure TCP socket for maximum throughput
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		c.tcpConn = tcpConn
+		
+		// Apply Linux-specific optimizations in optimized mode
+		if c.UseOptimized {
+			if err := c.applyOptimizedTCPOptions(tcpConn); err != nil {
+				log.Printf("Warning: Could not apply optimized TCP options: %v", err)
+			} else {
+				log.Printf("Connection %d->%s: Applied optimized TCP socket options", c.ID, c.TargetIP)
+			}
+		}
 		
 		// Set socket buffer sizes for 100Gbps networks
 		if c.throughputMode {
@@ -313,13 +357,7 @@ func (c *Connection) tcpSenderThroughput(ctx context.Context) {
 	var bufPtr *[]byte
 	var poolPut func(interface{})
 	
-	if writeBufferSize <= 65536 {
-		bufPtr = mediumBufferPool.Get().(*[]byte)
-		poolPut = mediumBufferPool.Put
-	} else {
-		bufPtr = largeBufferPool.Get().(*[]byte)
-		poolPut = largeBufferPool.Put
-	}
+	bufPtr, poolPut = getOptimalBufferPool(writeBufferSize, c.UseOptimized)
 	
 	buffer := (*bufPtr)[:writeBufferSize]
 	defer func() {
@@ -449,16 +487,7 @@ func (c *Connection) tcpReceiverThroughput(ctx context.Context) {
 	var bufPtr *[]byte
 	var poolPut func(interface{})
 	
-	if c.BufferSize <= 65536 {
-		bufPtr = mediumBufferPool.Get().(*[]byte)
-		poolPut = mediumBufferPool.Put
-	} else if c.BufferSize <= 4194304 {
-		bufPtr = largeBufferPool.Get().(*[]byte)
-		poolPut = largeBufferPool.Put
-	} else {
-		bufPtr = jumboBufferPool.Get().(*[]byte)
-		poolPut = jumboBufferPool.Put
-	}
+	bufPtr, poolPut = getOptimalBufferPool(c.BufferSize, c.UseOptimized)
 	
 	buffer := (*bufPtr)[:c.BufferSize]
 	defer func() {
@@ -574,10 +603,10 @@ func (c *Connection) udpSenderThroughput(ctx context.Context) {
 	}
 	
 	// Get buffer from pool
-	bufPtr := largeBufferPool.Get().(*[]byte)
+	bufPtr, poolPut := getOptimalBufferPool(maxPacketSize, c.UseOptimized)
 	packet := (*bufPtr)[:maxPacketSize]
 	defer func() {
-		largeBufferPool.Put(bufPtr)
+		poolPut(bufPtr)
 	}()
 	
 	// Fill with pattern once
@@ -691,10 +720,10 @@ func (c *Connection) udpReceiverThroughput(ctx context.Context) {
 	maxPacketSize := 65507 // Max UDP payload
 	
 	// Get buffer from pool
-	bufPtr := largeBufferPool.Get().(*[]byte)
+	bufPtr, poolPut := getOptimalBufferPool(maxPacketSize, c.UseOptimized)
 	buffer := (*bufPtr)[:maxPacketSize]
 	defer func() {
-		largeBufferPool.Put(bufPtr)
+		poolPut(bufPtr)
 	}()
 	
 	// Use local counters

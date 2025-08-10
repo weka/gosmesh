@@ -14,6 +14,7 @@ import (
 	"github.com/weka/gosmesh/pkg/network"
 )
 
+
 type NetworkTester struct {
 	localIP        string
 	targetIPs      []string
@@ -109,7 +110,12 @@ func (nt *NetworkTester) Start() error {
 		}
 		
 		for i := 0; i < nt.concurrency; i++ {
+			// Create connection
 			conn := network.NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
+			
+			// Set optimization flag
+			conn.UseOptimized = nt.UseOptimized
+			
 			// Apply performance tuning parameters
 			if nt.BufferSize > 0 {
 				conn.BufferSize = nt.BufferSize
@@ -125,6 +131,7 @@ func (nt *NetworkTester) Start() error {
 			conn.BusyPollUsecs = nt.BusyPollUsecs
 			nt.connections = append(nt.connections, conn)
 			
+			// Start connection goroutine
 			nt.wg.Add(1)
 			go func(c *network.Connection) {
 				defer nt.wg.Done()
@@ -294,9 +301,9 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 	
 	testDuration := nt.endTime.Sub(nt.startTime)
 	
-	report := fmt.Sprintf("\n\n" + strings.Repeat("=", 60) + "\n")
-	report += fmt.Sprintf("                    FINAL REPORT\n")
-	report += fmt.Sprintf(strings.Repeat("=", 60) + "\n")
+	report := "\n\n" + strings.Repeat("=", 60) + "\n"
+	report += "                    FINAL REPORT\n"
+	report += strings.Repeat("=", 60) + "\n"
 	report += fmt.Sprintf("Test Duration: %v\n", testDuration.Round(time.Second))
 	report += fmt.Sprintf("Protocol: %s | Packet Size: %d bytes\n", nt.protocol, nt.packetSize)
 	report += fmt.Sprintf("Concurrency: %d connections per target\n\n", nt.concurrency)
