@@ -66,9 +66,10 @@ tasks:
       - go test -v ./...
 
   vet:
-    desc: Run go vet to check for common issues
+    desc: Run go vet to check for common issues (current platform and Linux cross-compile)
     cmds:
       - go vet ./...
+      - GOOS=linux GOARCH=amd64 go vet ./...
 
   test-local:
     desc: Run a quick local mesh test

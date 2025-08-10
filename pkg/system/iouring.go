@@ -213,18 +213,18 @@ func (r *IOUring) mapRings() error {
 	r.sqTail = (*uint32)(unsafe.Pointer(&r.sqRing[r.params.sqOff.tail]))
 	r.sqMask = *(*uint32)(unsafe.Pointer(&r.sqRing[r.params.sqOff.ringMask]))
 	
-	arrayPtr := uintptr(unsafe.Pointer(&r.sqRing[0])) + uintptr(r.params.sqOff.array)
-	r.sqArray = (*[1 << 16]uint32)(unsafe.Pointer(arrayPtr))[:r.params.sqEntries:r.params.sqEntries]
+	arrayPtr := unsafe.Add(unsafe.Pointer(&r.sqRing[0]), r.params.sqOff.array)
+	r.sqArray = unsafe.Slice((*uint32)(arrayPtr), r.params.sqEntries)
 
 	r.cqHead = (*uint32)(unsafe.Pointer(&r.cqRing[r.params.cqOff.head]))
 	r.cqTail = (*uint32)(unsafe.Pointer(&r.cqRing[r.params.cqOff.tail]))
 	r.cqMask = *(*uint32)(unsafe.Pointer(&r.cqRing[r.params.cqOff.ringMask]))
 
-	cqePtr := uintptr(unsafe.Pointer(&r.cqRing[0])) + uintptr(r.params.cqOff.cqes)
-	r.cqes = (*[1 << 16]ioUringCQE)(unsafe.Pointer(cqePtr))[:r.params.cqEntries:r.params.cqEntries]
+	cqePtr := unsafe.Add(unsafe.Pointer(&r.cqRing[0]), r.params.cqOff.cqes)
+	r.cqes = unsafe.Slice((*ioUringCQE)(cqePtr), r.params.cqEntries)
 
-	sqePtr := uintptr(unsafe.Pointer(&sqeBytes[0]))
-	r.sqes = (*[1 << 16]ioUringSQE)(unsafe.Pointer(sqePtr))[:r.params.sqEntries:r.params.sqEntries]
+	sqePtr := unsafe.Pointer(&sqeBytes[0])
+	r.sqes = unsafe.Slice((*ioUringSQE)(sqePtr), r.params.sqEntries)
 
 	return nil
 }
@@ -370,7 +370,7 @@ func (r *IOUring) processCompletions() {
 func (r *IOUring) Close() error {
 	if r.sqes != nil {
 		sqeSize := uintptr(r.params.sqEntries) * unsafe.Sizeof(ioUringSQE{})
-		syscall.Munmap((*[1 << 30]byte)(unsafe.Pointer(&r.sqes[0]))[:sqeSize:sqeSize])
+		syscall.Munmap(unsafe.Slice((*byte)(unsafe.Pointer(&r.sqes[0])), sqeSize))
 	}
 	if r.sqRing != nil {
 		syscall.Munmap(r.sqRing)

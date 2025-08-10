@@ -260,9 +260,14 @@ Based on extensive testing, GosMesh achieves:
 - **Asymmetric performance**: May indicate routing or hardware issues
 
 #### Packet Mode Only
-- **High packet loss**: Network congestion, buffer overruns, or connectivity issues
+- **High packet loss** (UDP): Network congestion, buffer overruns, or connectivity issues
 - **High jitter**: Network instability, congestion, or competing traffic
 - **Variable RTT**: Routing changes or network congestion
+
+#### TCP vs UDP in Packet Mode
+- **TCP packet loss always shows "Not applicable"**: This is correct - TCP hides retransmissions from the application
+- **Use UDP for packet loss testing**: TCP's built-in reliability makes application-level loss measurement meaningless
+- **RTT/Jitter available for both**: Both protocols can measure round-trip times accurately
 
 ## Troubleshooting
 
