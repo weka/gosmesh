@@ -55,6 +55,3 @@ simple-*.sh
 # Test output and logs
 test-output.log
 *.log
-
-# Workers directory (if temporary)
-workers/

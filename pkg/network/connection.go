@@ -834,6 +834,16 @@ func (c *Connection) processReceivedPacket(data []byte) {
 	rttNanos := now - sentTime
 	rttMs := float64(rttNanos) / 1e6
 	
+	// Sanity check RTT - reject impossible values
+	if rttMs < 0 || rttMs > 10000 { // Reject RTT > 10 seconds or negative
+		// Log first few bad RTT values for debugging
+		if len(c.rttHistory) < 5 {
+			log.Printf("Connection %d: Bad RTT calculation: sent=%d, now=%d, rtt=%f ms", 
+				c.ID, sentTime, now, rttMs)
+		}
+		return // Don't process this packet
+	}
+	
 	c.packetsReceived.Add(1)
 	c.bytesReceived.Add(int64(len(data)))
 	
