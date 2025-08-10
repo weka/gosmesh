@@ -748,7 +748,16 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	}
 	
 	// Step 1: Thorough cleanup of old processes and services
-	if err := mc.cleanupNode(ip, sshHost); err != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	opts := CleanupNodeOptions{
+		IP:          ip,
+		SSHHost:     sshHost,
+		Verbose:     mc.config.Verbose,
+		ServiceName: "gosmesh-mesh",
+		RemoteDir:   "/opt/gosmesh",
+	}
+	if err := CleanupNode(cleanupCtx, opts); err != nil {
 		return err
 	}
 	
@@ -1110,209 +1119,6 @@ func (mc *MeshController) displayStats() {
 	fmt.Printf("=======================\n")
 }
 
-// cleanupNode performs thorough cleanup on a single node
-func (mc *MeshController) cleanupNode(ip, sshHost string) error {
-	serviceName := "gosmesh-mesh"
-	remoteBinary := "/opt/gosmesh/gosmesh"
-	
-	// Stop service if it exists
-	if mc.config.Verbose {
-		log.Printf("[%s] Stopping existing service...", ip)
-	}
-	stopCmd := fmt.Sprintf("systemctl stop %s || true", serviceName)
-	if err := mc.execSSH(sshHost, stopCmd, "stop service"); err != nil {
-		return fmt.Errorf("[%s] stop service failed: %v", ip, err)
-	}
-	
-	// Disable service if it exists
-	if mc.config.Verbose {
-		log.Printf("[%s] Disabling existing service...", ip)
-	}
-	disableCmd := fmt.Sprintf("systemctl disable %s || true", serviceName)
-	if err := mc.execSSH(sshHost, disableCmd, "disable service"); err != nil {
-		return fmt.Errorf("[%s] disable service failed: %v", ip, err)
-	}
-	
-	// Reset failed state (redirect stderr to avoid hanging)
-	if mc.config.Verbose {
-		log.Printf("[%s] Resetting failed state...", ip)
-	}
-	resetCmd := fmt.Sprintf("systemctl reset-failed %s 2>/dev/null || true", serviceName)
-	if err := mc.execSSH(sshHost, resetCmd, "reset failed state"); err != nil {
-		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
-	}
-	
-	// Kill processes running specifically from /opt/gosmesh/ path using their executable location
-	if mc.config.Verbose {
-		log.Printf("[%s] Killing processes from /opt/gosmesh...", ip)
-	}
-	killCmd := fmt.Sprintf(`
-killed=false
-for pid in $(pgrep gosmesh 2>/dev/null || true); do
-    if [ -n "$pid" ]; then
-        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
-        if [ "$exe_path" = "%s" ]; then
-            echo "Killing process $pid from %s"
-            kill $pid && echo "Killed $pid" || echo "Failed to kill $pid"
-            killed=true
-        fi
-    fi
-done
-if [ "$killed" = "false" ]; then
-    echo "No processes from /opt/gosmesh to kill"
-fi
-`, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, killCmd, "kill /opt/gosmesh processes"); err != nil {
-		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
-	}
-	
-	// Force kill any remaining processes
-	if mc.config.Verbose {
-		log.Printf("[%s] Force killing any remaining processes from /opt/gosmesh...", ip)
-	}
-	forceKillCmd := fmt.Sprintf(`
-killed=false
-for pid in $(pgrep gosmesh 2>/dev/null || true); do
-    if [ -n "$pid" ]; then
-        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
-        if [ "$exe_path" = "%s" ]; then
-            echo "Force killing process $pid from %s"
-            kill -9 $pid && echo "Force killed $pid" || echo "Failed to force kill $pid"
-            killed=true
-        fi
-    fi
-done
-if [ "$killed" = "false" ]; then
-    echo "No processes from /opt/gosmesh to force kill"
-fi
-`, remoteBinary, remoteBinary)
-	if err := mc.execSSH(sshHost, forceKillCmd, "force kill /opt/gosmesh processes"); err != nil {
-		return fmt.Errorf("[%s] force kill processes failed: %v", ip, err)
-	}
-	
-	// Remove files
-	if mc.config.Verbose {
-		log.Printf("[%s] Removing old files...", ip)
-	}
-	removeCmd := fmt.Sprintf("rm -f %s /etc/systemd/system/%s.service", remoteBinary, serviceName)
-	if err := mc.execSSH(sshHost, removeCmd, "remove files"); err != nil {
-		return fmt.Errorf("[%s] remove files failed: %v", ip, err)
-	}
-	
-	// Reload systemd
-	if mc.config.Verbose {
-		log.Printf("[%s] Reloading systemd...", ip)
-	}
-	reloadCmd := "systemctl daemon-reload"
-	if err := mc.execSSH(sshHost, reloadCmd, "reload systemd"); err != nil {
-		return fmt.Errorf("[%s] reload systemd failed: %v", ip, err)
-	}
-	
-	if mc.config.Verbose {
-		log.Printf("[%s] Cleanup completed successfully", ip)
-	}
-	
-	return nil
-}
-
-// cleanupNodeWithContext performs thorough cleanup on a single node with context support
-func (mc *MeshController) cleanupNodeWithContext(ctx context.Context, ip, sshHost string) error {
-	serviceName := "gosmesh-mesh"
-	remoteBinary := "/opt/gosmesh/gosmesh"
-	
-	// Stop service if it exists
-	if mc.config.Verbose {
-		log.Printf("[%s] Stopping existing service...", ip)
-	}
-	stopCmd := fmt.Sprintf("systemctl stop %s || true", serviceName)
-	if err := mc.execSSHWithContext(ctx, sshHost, stopCmd, "stop service"); err != nil {
-		return fmt.Errorf("[%s] stop service failed: %v", ip, err)
-	}
-	
-	// Disable service if it exists
-	if mc.config.Verbose {
-		log.Printf("[%s] Disabling existing service...", ip)
-	}
-	disableCmd := fmt.Sprintf("systemctl disable %s || true", serviceName)
-	if err := mc.execSSHWithContext(ctx, sshHost, disableCmd, "disable service"); err != nil {
-		return fmt.Errorf("[%s] disable service failed: %v", ip, err)
-	}
-	
-	// Reset failed state (redirect stderr to avoid hanging)
-	if mc.config.Verbose {
-		log.Printf("[%s] Resetting failed state...", ip)
-	}
-	resetCmd := fmt.Sprintf("systemctl reset-failed %s 2>/dev/null || true", serviceName)
-	if err := mc.execSSHWithContext(ctx, sshHost, resetCmd, "reset failed state"); err != nil {
-		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
-	}
-	
-	// Kill processes running specifically from /opt/gosmesh/ path using their executable location
-	if mc.config.Verbose {
-		log.Printf("[%s] Killing processes from /opt/gosmesh...", ip)
-	}
-	killCmd := fmt.Sprintf(`
-killed=false
-for pid in $(pgrep gosmesh 2>/dev/null || true); do
-    if [ -n "$pid" ]; then
-        exe_path=$(readlink /proc/$pid/exe 2>/dev/null || echo "")
-        if [ "$exe_path" = "%s" ]; then
-            echo "Killing process $pid from %s"
-            kill $pid && echo "Killed $pid" || echo "Failed to kill $pid"
-            killed=true
-        fi
-    fi
-done
-if [ "$killed" = "false" ]; then
-    echo "No processes found from %s"
-fi
-`, remoteBinary, remoteBinary, remoteBinary)
-	if err := mc.execSSHWithContext(ctx, sshHost, killCmd, "kill processes"); err != nil {
-		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
-	}
-	
-	// Remove service file
-	if mc.config.Verbose {
-		log.Printf("[%s] Removing service file...", ip)
-	}
-	removeServiceCmd := fmt.Sprintf("rm -f /etc/systemd/system/%s.service", serviceName)
-	if err := mc.execSSHWithContext(ctx, sshHost, removeServiceCmd, "remove service file"); err != nil {
-		return fmt.Errorf("[%s] remove service file failed: %v", ip, err)
-	}
-	
-	// Remove binary
-	if mc.config.Verbose {
-		log.Printf("[%s] Removing binary...", ip)
-	}
-	removeBinaryCmd := fmt.Sprintf("rm -f %s", remoteBinary)
-	if err := mc.execSSHWithContext(ctx, sshHost, removeBinaryCmd, "remove binary"); err != nil {
-		return fmt.Errorf("[%s] remove binary failed: %v", ip, err)
-	}
-	
-	// Remove directory if empty (ignore errors)
-	cleanupDirCmd := "rmdir /opt/gosmesh 2>/dev/null || true"
-	if err := mc.execSSHWithContext(ctx, sshHost, cleanupDirCmd, "cleanup directory"); err != nil {
-		// Don't fail on directory cleanup errors
-		if mc.config.Verbose {
-			log.Printf("[%s] Warning: cleanup directory failed: %v", ip, err)
-		}
-	}
-	
-	// Reload systemd
-	if mc.config.Verbose {
-		log.Printf("[%s] Reloading systemd...", ip)
-	}
-	reloadCmd := "systemctl daemon-reload"
-	if err := mc.execSSHWithContext(ctx, sshHost, reloadCmd, "reload systemd"); err != nil {
-		return fmt.Errorf("[%s] reload systemd failed: %v", ip, err)
-	}
-	
-	if mc.config.Verbose {
-		log.Printf("[%s] Cleanup completed successfully", ip)
-	}
-	
-	return nil
-}
 
 // cleanup performs cleanup on all nodes concurrently
 func (mc *MeshController) cleanup() {
@@ -1330,7 +1136,14 @@ func (mc *MeshController) cleanup() {
 			// Create per-server timeout of 120 seconds
 			serverCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()
-			return mc.cleanupNodeWithContext(serverCtx, target.IP, target.SSHHost)
+			opts := CleanupNodeOptions{
+				IP:          target.IP,
+				SSHHost:     target.SSHHost,
+				Verbose:     mc.config.Verbose,
+				ServiceName: "gosmesh-mesh",
+				RemoteDir:   "/opt/gosmesh",
+			}
+			return CleanupNode(serverCtx, opts)
 		})
 	
 	// Log cleanup results

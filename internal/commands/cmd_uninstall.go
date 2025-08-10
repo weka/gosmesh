@@ -1,11 +1,11 @@
 package commands
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 )
@@ -89,75 +89,23 @@ func (u *Uninstaller) Run() {
 }
 
 func (u *Uninstaller) uninstallFromNode(ip string, index int) error {
-	serviceName := "gosmesh-mesh"
-	remoteDir := "/opt/gosmesh"
-
-	if ip == u.localIP {
-		// Uninstall locally
-		log.Printf("Uninstalling from local node %s", ip)
-
-		// Stop service
-		cmd := exec.Command("systemctl", "stop", serviceName)
-		if err := cmd.Run(); err != nil {
-			log.Printf("Warning: failed to stop service: %v", err)
-		}
-
-		// Disable service
-		cmd = exec.Command("systemctl", "disable", serviceName)
-		if err := cmd.Run(); err != nil {
-			log.Printf("Warning: failed to disable service: %v", err)
-		}
-
-		// Remove service file
-		servicePath := fmt.Sprintf("/etc/systemd/system/%s.service", serviceName)
-		if err := os.Remove(servicePath); err != nil {
-			log.Printf("Warning: failed to remove service file: %v", err)
-		}
-
-		// Reload systemd
-		cmd = exec.Command("systemctl", "daemon-reload")
-		if err := cmd.Run(); err != nil {
-			log.Printf("Warning: failed to reload systemd: %v", err)
-		}
-
-		// Remove binary and directory
-		if err := os.RemoveAll(remoteDir); err != nil {
-			log.Printf("Warning: failed to remove directory: %v", err)
-		}
+	// Use provided SSH host or default to root@ip
+	var sshHost string
+	if len(u.sshHosts) > index {
+		sshHost = u.sshHosts[index]
 	} else {
-		// Uninstall remotely via SSH
-		log.Printf("Uninstalling from remote node %s", ip)
-		
-		// Use provided SSH host or default to root@ip
-		var sshHost string
-		if len(u.sshHosts) > index {
-			sshHost = u.sshHosts[index]
-		} else {
-			sshHost = fmt.Sprintf("root@%s", ip)
-		}
-
-		// Stop service
-		cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", sshHost, fmt.Sprintf("systemctl stop %s 2>/dev/null", serviceName))
-		cmd.Run() // Ignore errors as service might not exist
-
-		// Disable service
-		cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", sshHost, fmt.Sprintf("systemctl disable %s 2>/dev/null", serviceName))
-		cmd.Run()
-
-		// Remove service file
-		cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", sshHost, fmt.Sprintf("rm -f /etc/systemd/system/%s.service", serviceName))
-		cmd.Run()
-
-		// Reload systemd
-		cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", sshHost, "systemctl daemon-reload")
-		cmd.Run()
-
-		// Remove binary and directory
-		cmd = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10", sshHost, fmt.Sprintf("rm -rf %s", remoteDir))
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to remove remote directory: %v", err)
-		}
+		sshHost = fmt.Sprintf("root@%s", ip)
 	}
 
-	return nil
+	// Use the shared cleanup function
+	ctx := context.Background()
+	opts := CleanupNodeOptions{
+		IP:          ip,
+		SSHHost:     sshHost,
+		Verbose:     true, // Always verbose for uninstall
+		ServiceName: "gosmesh-mesh",
+		RemoteDir:   "/opt/gosmesh",
+	}
+
+	return CleanupNode(ctx, opts)
 }
