@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/weka/gosmesh/internal/commands"
 )
 
 func main() {
@@ -16,11 +18,11 @@ func main() {
 
 	switch command {
 	case "run":
-		RunCommand(args)
+		commands.RunCommand(args)
 	case "mesh":
-		MeshCommand(args)
+		commands.MeshCommand(args)
 	case "uninstall":
-		UninstallCommand(args)
+		commands.UninstallCommand(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:

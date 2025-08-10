@@ -1,6 +1,6 @@
 // +build linux
 
-package main
+package network
 
 import (
 	"context"
@@ -47,11 +47,11 @@ type OptimizedConnection struct {
 	statsRing      *RingBuffer
 	
 	// Multiple workers per connection
-	numWorkers     int
+	NumWorkers     int
 	
 	// TCP optimizations
 	tcpMSS         int
-	tcpCork        bool
+	TCPCork        bool
 	
 	// Socket FD for advanced operations
 	socketFD       int
@@ -194,7 +194,7 @@ func (c *OptimizedConnection) OptimizedTCPSender(ctx context.Context) {
 	}
 	
 	// Use multiple goroutines for sending
-	numWorkers := c.numWorkers
+	numWorkers := c.NumWorkers
 	if numWorkers == 0 {
 		numWorkers = runtime.NumCPU()
 	}

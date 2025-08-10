@@ -1,7 +1,7 @@
-//go:build linux
-// +build linux
+//go:build darwin
+// +build darwin
 
-package main
+package performance
 
 import (
 	"fmt"
@@ -9,9 +9,7 @@ import (
 	"unsafe"
 )
 
-const MSG_ZEROCOPY = 0x4000000
-
-// SendBatchLinux sends multiple buffers in a single syscall using sendmmsg on Linux
+// SendBatchLinux sends multiple buffers (stub for Darwin)
 func (z *ZeroCopySender) SendBatchLinux(buffers [][]byte) (int, error) {
 	if z.fd < 0 {
 		return 0, fmt.Errorf("invalid file descriptor")
@@ -28,18 +26,18 @@ func (z *ZeroCopySender) SendBatchLinux(buffers [][]byte) (int, error) {
 		}
 	}
 
-	// Prepare message header - Linux uses uint64 for Iovlen
+	// Prepare message header - Darwin uses int32 for Iovlen
 	msg := syscall.Msghdr{
 		Iov:    &iovecs[0],
-		Iovlen: uint64(len(iovecs)),
+		Iovlen: int32(len(iovecs)),
 	}
 
-	// Send with MSG_ZEROCOPY flag
+	// Send with MSG_ZEROCOPY flag (not supported on Darwin, use 0)
 	n, _, errno := syscall.Syscall6(
 		syscall.SYS_SENDMSG,
 		uintptr(z.fd),
 		uintptr(unsafe.Pointer(&msg)),
-		MSG_ZEROCOPY,
+		0, // MSG_ZEROCOPY not supported on Darwin
 		0, 0, 0,
 	)
 

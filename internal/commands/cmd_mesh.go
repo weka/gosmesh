@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/weka/gosmesh/workers"
+	"github.com/weka/gosmesh/pkg/workers"
 )
 
 type MeshConfig struct {

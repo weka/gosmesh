@@ -1,7 +1,7 @@
 //go:build linux
 // +build linux
 
-package main
+package performance
 
 import (
 	"fmt"
@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"syscall"
 	"unsafe"
+
+	"github.com/weka/gosmesh/pkg/system"
 )
 
 const (
@@ -112,7 +114,7 @@ func (h *HugePageAllocator) checkHugePages() error {
 
 // allocateHugePage allocates a single huge page
 func (h *HugePageAllocator) allocateHugePage() ([]byte, error) {
-	flags := syscall.MAP_PRIVATE | syscall.MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE | MAP_LOCKED
+	flags := syscall.MAP_PRIVATE | syscall.MAP_ANONYMOUS | MAP_HUGETLB | system.MAP_POPULATE | MAP_LOCKED
 	
 	// Add huge page size flag
 	if h.pageSize == HUGEPAGE_2MB {

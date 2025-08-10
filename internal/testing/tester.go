@@ -1,4 +1,4 @@
-package main
+package testing
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/weka/gosmesh/pkg/network"
 )
 
 type NetworkTester struct {
@@ -27,7 +29,7 @@ type NetworkTester struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	connections []*Connection
+	connections []*network.Connection
 	mu          sync.RWMutex
 	
 	startTime time.Time
@@ -83,7 +85,7 @@ func (nt *NetworkTester) Start() error {
 	nt.startTime = time.Now()
 	
 	// Start server
-	server := NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
+	server := network.NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("failed to start server: %v", err)
 	}
@@ -107,27 +109,27 @@ func (nt *NetworkTester) Start() error {
 		}
 		
 		for i := 0; i < nt.concurrency; i++ {
-			conn := NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
+			conn := network.NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
 			// Apply performance tuning parameters
 			if nt.BufferSize > 0 {
-				conn.bufferSize = nt.BufferSize
+				conn.BufferSize = nt.BufferSize
 			}
 			if nt.NumWorkers > 0 {
-				conn.numWorkers = nt.NumWorkers
+				conn.NumWorkers = nt.NumWorkers
 			}
-			conn.sendBatchSize = nt.SendBatchSize
-			conn.recvBatchSize = nt.RecvBatchSize
-			conn.tcpCork = nt.TCPCork
-			conn.tcpQuickAck = nt.TCPQuickAck
-			conn.tcpNoDelay = nt.TCPNoDelay
-			conn.busyPollUsecs = nt.BusyPollUsecs
+			conn.SendBatchSize = nt.SendBatchSize
+			conn.RecvBatchSize = nt.RecvBatchSize
+			conn.TCPCork = nt.TCPCork
+			conn.TCPQuickAck = nt.TCPQuickAck
+			conn.TCPNoDelay = nt.TCPNoDelay
+			conn.BusyPollUsecs = nt.BusyPollUsecs
 			nt.connections = append(nt.connections, conn)
 			
 			nt.wg.Add(1)
-			go func(c *Connection) {
+			go func(c *network.Connection) {
 				defer nt.wg.Done()
 				if err := c.Start(nt.ctx); err != nil {
-					log.Printf("Connection to %s failed: %v", c.targetIP, err)
+					log.Printf("Connection to %s failed: %v", c.TargetIP, err)
 				}
 			}(conn)
 		}
@@ -178,7 +180,7 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 	
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
-		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.targetIP, conn.id, nt.protocol)
+		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.TargetIP, conn.ID, nt.protocol)
 		report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n", 
 			stats.PacketsSent, stats.PacketsReceived, stats.PacketsLost, stats.LossRate)
 		report += fmt.Sprintf("  Throughput: %.2f Mbps | Avg RTT: %.2f ms | Jitter: %.2f ms\n",
@@ -301,19 +303,19 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 	// Collect stats from all connections
 	type targetStats struct {
 		ip    string
-		conns []*ConnectionStats
+		conns []*network.ConnectionStats
 	}
 	
 	targetMap := make(map[string]*targetStats)
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
-		if _, exists := targetMap[conn.targetIP]; !exists {
-			targetMap[conn.targetIP] = &targetStats{
-				ip:    conn.targetIP,
-				conns: []*ConnectionStats{},
+		if _, exists := targetMap[conn.TargetIP]; !exists {
+			targetMap[conn.TargetIP] = &targetStats{
+				ip:    conn.TargetIP,
+				conns: []*network.ConnectionStats{},
 			}
 		}
-		targetMap[conn.targetIP].conns = append(targetMap[conn.targetIP].conns, &stats)
+		targetMap[conn.TargetIP].conns = append(targetMap[conn.TargetIP].conns, &stats)
 	}
 	
 	// Generate per-target summary

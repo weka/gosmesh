@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"flag"
@@ -12,6 +12,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/weka/gosmesh/internal/testing"
+	"github.com/weka/gosmesh/pkg/performance"
 )
 
 type RunConfig struct {
@@ -132,7 +135,7 @@ func runWithConfig(config *RunConfig) {
 
 	// Auto-detect packet size
 	if config.PacketSize == 0 {
-		mtu, err := GetMTU(localIP)
+		mtu, err := performance.GetMTU(localIP)
 		if err != nil {
 			mtu = 9000
 		}
@@ -143,7 +146,7 @@ func runWithConfig(config *RunConfig) {
 				config.PacketSize = mtu - 40
 			}
 		} else {
-			config.PacketSize = CalculateOptimalPacketSize(mtu, config.Protocol)
+			config.PacketSize = performance.CalculateOptimalPacketSize(mtu, config.Protocol)
 		}
 	}
 
@@ -165,7 +168,7 @@ func runWithConfig(config *RunConfig) {
 		}
 	}
 
-	tester := NewNetworkTester(localIP, ipList, config.Protocol, config.Concurrency,
+	tester := testing.NewNetworkTester(localIP, ipList, config.Protocol, config.Concurrency,
 		config.Duration, config.ReportInterval, config.PacketSize, config.Port, config.PPS)
 
 	// Configure tester with all settings

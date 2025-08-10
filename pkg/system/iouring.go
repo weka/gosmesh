@@ -1,7 +1,7 @@
 //go:build linux
 // +build linux
 
-package main
+package system
 
 import (
 	"fmt"
@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"github.com/weka/gosmesh/pkg/network"
 )
 
 // io_uring syscall numbers for Linux
@@ -115,7 +117,7 @@ type IOUringConnection struct {
 	fd        int
 	ring      *IOUring
 	bufferPool *sync.Pool
-	stats     *ConnectionStats
+	stats     *network.ConnectionStats
 }
 
 // IOUring represents an io_uring instance
@@ -415,7 +417,7 @@ func NewIOUringConnection(conn net.Conn) (*IOUringConnection, error) {
 				return make([]byte, 65536)
 			},
 		},
-		stats: &ConnectionStats{},
+		stats: &network.ConnectionStats{},
 	}, nil
 }
 
