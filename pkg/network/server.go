@@ -129,15 +129,13 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 	// Use larger buffer for throughput mode
 	buffer := make([]byte, s.bufferSize)
 	
-	// Configure TCP connection for max throughput
+	// Configure TCP connection 
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetWriteBuffer(16777216) // 16MB
 		tcpConn.SetReadBuffer(16777216)  // 16MB
 		tcpConn.SetNoDelay(false)        // Enable Nagle's for throughput
 	}
 	
-	// In throughput mode, just consume data without echoing
-	// This is more like iperf which measures unidirectional throughput
 	totalBytes := int64(0)
 	readCount := 0
 	
@@ -147,10 +145,13 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 			log.Printf("Server: Connection from %s closing due to context, total bytes: %d", remoteAddr, totalBytes)
 			return
 		default:
-			// Remove deadline for maximum throughput
-			conn.SetReadDeadline(time.Time{})
+			// Set a reasonable read deadline
+			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 			n, err := conn.Read(buffer)
 			if err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					continue // Normal timeout, keep listening
+				}
 				log.Printf("Server: Connection from %s error: %v, total bytes: %d", remoteAddr, err, totalBytes)
 				return
 			}
@@ -161,8 +162,21 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 				log.Printf("Server: First read from %s, n=%d", remoteAddr, n)
 			}
 			
-			// Don't echo in throughput mode - just consume data
-			// This allows sender to send at maximum speed
+			// Detect packet mode vs throughput mode by examining packet structure
+			// In packet mode, packets have timestamp headers (16 bytes minimum)
+			if n >= 16 {
+				// Check if this looks like a packet mode packet (has sequence + timestamp)
+				// For now, assume packet mode if packet is small and has header structure
+				if n <= 2048 {  // Packet mode typically uses smaller packets
+					// Echo the packet back for RTT measurement
+					_, writeErr := conn.Write(buffer[:n])
+					if writeErr != nil {
+						log.Printf("Server: Echo write error to %s: %v", remoteAddr, writeErr)
+						return
+					}
+				}
+				// Large packets (>2KB) are assumed to be throughput mode - just consume
+			}
 		}
 	}
 }

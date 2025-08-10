@@ -484,11 +484,12 @@ func (c *Connection) tcpSenderPacket(ctx context.Context) {
 func (c *Connection) tcpReceiver(ctx context.Context) {
 	if c.throughputMode {
 		// In throughput mode, we don't receive echo - server just consumes
-		// So receiver does nothing (like iperf client)
+		// So receiver does nothing (like iperf client)  
 		log.Printf("Connection %d: TCP receiver in throughput mode - no echo expected", c.ID)
 		<-ctx.Done()
 	} else {
 		// Packet mode: process individual packets for RTT
+		log.Printf("Connection %d: TCP receiver in packet mode - expecting echo", c.ID)
 		c.tcpReceiverPacket(ctx)
 	}
 }
