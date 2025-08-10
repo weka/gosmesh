@@ -25,51 +25,80 @@ go build -o gosmesh
 
 ## Usage
 
+GosMesh has three main commands:
+
+### Commands
+
+- **`run`** - Run network test directly (used by systemd on individual nodes)
+- **`mesh`** - Deploy and orchestrate mesh testing across multiple nodes from a single controller
+- **`uninstall`** - Remove gosmesh deployment from specified nodes
+
 ### Basic Usage
 
+#### Direct Node Testing
 ```bash
-./gosmesh --ips ip1,ip2,ip3
+gosmesh run --ips ip1,ip2,ip3
 ```
 
-Each server should be started with the same IP list. The tool automatically detects which IP belongs to the local machine and uses it as the listening address.
+#### Mesh Controller (Recommended)
+```bash
+gosmesh mesh --ips ip1,ip2,ip3
+```
+
+The mesh controller automatically deploys, starts, and monitors tests across all nodes from a single control point.
 
 ### Command Line Options
 
+#### Common Options (both run and mesh)
 ```
 --ips               Comma-separated list of IPs for full mesh testing (required)
 --protocol          Protocol to use: udp or tcp (default: tcp)
 --total-connections Total connections to distribute across mesh (default: 64)
 --concurrency       Connections per target (0=auto from total-connections)
---duration          Test duration (default: 30s)
+--duration          Test duration (default: 5m)
 --report-interval   Interval for periodic reports (default: 5s)
 --packet-size       Size of test packets (0=auto-detect, uses jumbo frames)
 --port              Port to use for testing (default: 9999)
 --buffer-size       Buffer size for throughput mode (0=auto, 4MB for TCP)
 ```
 
+#### Mesh-specific Options
+```
+--ssh-hosts         SSH hosts (user@host1,user@host2,...) - if not provided, uses root@IP
+--api-port          Port for API server (default: 8080)
+--verbose           Enable verbose logging
+```
+
 ### Examples
 
-#### High-Performance 2-node test (100Gbps networks)
+#### Mesh Controller (Recommended)
 ```bash
-# Each node will use 64 connections to the other
-./gosmesh --ips 10.200.6.28,10.200.6.240
+# High-Performance 2-node test (100Gbps networks)
+gosmesh mesh --ips 10.200.6.28,10.200.6.240 --duration 2m
+
+# 3-node full mesh test
+gosmesh mesh --ips 192.168.1.10,192.168.1.11,192.168.1.12
+
+# 4-node mesh with custom connection count
+gosmesh mesh --ips 10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4 --total-connections 128
+
+# UDP test with verbose logging
+gosmesh mesh --ips 172.16.0.10,172.16.0.11 --protocol udp --verbose
 ```
 
-#### 3-node full mesh test
+#### Direct Node Testing
 ```bash
-# Each node connects to 2 others with 32 connections each (64 total)
-./gosmesh --ips 192.168.1.10,192.168.1.11,192.168.1.12
+# Run directly on each node (must start simultaneously)
+gosmesh run --ips 10.200.6.28,10.200.6.240
+
+# UDP test with packet rate limiting
+gosmesh run --ips 172.16.0.10,172.16.0.11 --protocol udp --pps 1000
 ```
 
-#### 4-node mesh with custom connection count
+#### Cleanup
 ```bash
-# Use 128 total connections (32 per target)
-./gosmesh --ips 10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4 --total-connections 128
-```
-
-#### UDP test with packet rate limiting
-```bash
-./gosmesh --ips 172.16.0.10,172.16.0.11 --protocol udp --pps 1000
+# Remove deployment from all nodes
+gosmesh uninstall --ips 10.200.6.28,10.200.6.240,10.200.6.25
 ```
 
 ## Output

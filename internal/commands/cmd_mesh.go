@@ -979,14 +979,29 @@ func (mc *MeshController) displayStats() {
 	var minThroughput, maxThroughput float64
 	var minServer, maxServer string
 	
+	// Aggregate metrics for jitter and packet loss
+	var totalPacketLoss, totalJitter, totalRTT float64
+	var minPacketLoss, maxPacketLoss float64 = 999999, 0
+	var minJitter, maxJitter float64 = 999999, 0
+	var minRTT, maxRTT float64 = 999999, 0
+	var minPacketLossServer, maxPacketLossServer string
+	var minJitterServer, maxJitterServer string
+	var minRTTServer, maxRTTServer string
+	
 	first := true
+	activeCount := 0
+	
 	for ip, stats := range mc.stats {
 		// Skip stale stats (older than 30 seconds)
 		if time.Since(stats.UpdatedAt) > 30*time.Second {
 			continue
 		}
 		
+		activeCount++
 		totalThroughput += stats.Throughput
+		totalPacketLoss += stats.PacketLoss
+		totalJitter += stats.Jitter
+		totalRTT += stats.RTT
 		
 		if first || stats.Throughput < minThroughput {
 			minThroughput = stats.Throughput
@@ -998,24 +1013,73 @@ func (mc *MeshController) displayStats() {
 			maxThroughput = stats.Throughput
 			maxServer = ip
 		}
-	}
-	
-	activeServers := 0
-	for _, stats := range mc.stats {
-		if time.Since(stats.UpdatedAt) <= 30*time.Second {
-			activeServers++
+		
+		// Track packet loss min/max
+		if stats.PacketLoss < minPacketLoss {
+			minPacketLoss = stats.PacketLoss
+			minPacketLossServer = ip
+		}
+		if stats.PacketLoss > maxPacketLoss {
+			maxPacketLoss = stats.PacketLoss
+			maxPacketLossServer = ip
+		}
+		
+		// Track jitter min/max
+		if stats.Jitter < minJitter {
+			minJitter = stats.Jitter
+			minJitterServer = ip
+		}
+		if stats.Jitter > maxJitter {
+			maxJitter = stats.Jitter
+			maxJitterServer = ip
+		}
+		
+		// Track RTT min/max
+		if stats.RTT < minRTT {
+			minRTT = stats.RTT
+			minRTTServer = ip
+		}
+		if stats.RTT > maxRTT {
+			maxRTT = stats.RTT
+			maxRTTServer = ip
 		}
 	}
 	
-	avgThroughput := totalThroughput / float64(activeServers)
+	if activeCount == 0 {
+		return
+	}
+	
+	// Calculate averages
+	avgThroughput := totalThroughput / float64(activeCount)
+	avgPacketLoss := totalPacketLoss / float64(activeCount)
+	avgJitter := totalJitter / float64(activeCount)
+	avgRTT := totalRTT / float64(activeCount)
 	
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Printf("\n=== Mesh Statistics [%s] ===\n", timestamp)
-	fmt.Printf("Active Servers: %d/%d\n", activeServers, len(mc.ipList))
-	fmt.Printf("Total Throughput: %.2f Gbps\n", totalThroughput)
-	fmt.Printf("Avg Throughput per Server: %.2f Gbps\n", avgThroughput)
-	fmt.Printf("Fastest Server: %s (%.2f Gbps)\n", maxServer, maxThroughput)
-	fmt.Printf("Slowest Server: %s (%.2f Gbps)\n", minServer, minThroughput)
+	fmt.Printf("Active Servers: %d/%d\n", activeCount, len(mc.ipList))
+	
+	// Throughput stats
+	fmt.Printf("\nThroughput:\n")
+	fmt.Printf("  Total: %.2f Gbps | Avg: %.2f Gbps\n", totalThroughput, avgThroughput)
+	fmt.Printf("  Best: %s (%.2f Gbps) | Worst: %s (%.2f Gbps)\n", 
+		maxServer, maxThroughput, minServer, minThroughput)
+	
+	// Packet loss stats
+	fmt.Printf("\nPacket Loss:\n")
+	fmt.Printf("  Avg: %.2f%% | Best: %s (%.2f%%) | Worst: %s (%.2f%%)\n", 
+		avgPacketLoss, minPacketLossServer, minPacketLoss, maxPacketLossServer, maxPacketLoss)
+	
+	// Jitter stats
+	fmt.Printf("\nJitter:\n")
+	fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
+		avgJitter, minJitterServer, minJitter, maxJitterServer, maxJitter)
+	
+	// RTT stats
+	fmt.Printf("\nRTT:\n")
+	fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
+		avgRTT, minRTTServer, minRTT, maxRTTServer, maxRTT)
+	
 	fmt.Printf("=======================\n")
 }
 
