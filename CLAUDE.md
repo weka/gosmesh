@@ -70,6 +70,18 @@ task test-local
 ./.temp/gosmesh --ips <ip1>,<ip2>,<ip3> --duration 30s --concurrency 2
 ```
 
+### Code Validation
+**ALWAYS validate code changes using go vet before committing:**
+```bash
+# Run go vet to check for common issues
+task vet
+```
+This should be run after every code change to catch potential issues like:
+- Unreachable code
+- Incorrect format strings
+- Missing imports
+- Type checking errors
+
 For multi-node testing:
 ```bash
 # Build and deploy to test servers

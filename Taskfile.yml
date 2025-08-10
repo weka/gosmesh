@@ -65,6 +65,11 @@ tasks:
     cmds:
       - go test -v ./...
 
+  vet:
+    desc: Run go vet to check for common issues
+    cmds:
+      - go vet ./...
+
   test-local:
     desc: Run a quick local mesh test
     deps: [build]
