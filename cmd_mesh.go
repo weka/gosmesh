@@ -28,6 +28,7 @@ type MeshConfig struct {
 	APIPort   int
 	Protocol  string
 	SSHHosts  string  // SSH hosts for deployment (host1,host2,host3)
+	Verbose   bool    // Enable verbose logging
 }
 
 type ServerStats struct {
@@ -66,6 +67,7 @@ func MeshCommand(args []string) {
 	fs.IntVar(&config.Port, "port", 9999, "Port for gonet testing")
 	fs.IntVar(&config.APIPort, "api-port", 8080, "Port for API server")
 	fs.StringVar(&config.Protocol, "protocol", "tcp", "Protocol to use: udp or tcp")
+	fs.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
 
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -100,12 +102,16 @@ func NewMeshController(config *MeshConfig) *MeshController {
 	}
 	
 	localIP := detectLocalIP(ipList)
-	log.Printf("Detected local IP from mesh list: %s", localIP)
+	if config.Verbose {
+		log.Printf("Detected local IP from mesh list: %s", localIP)
+	}
 	
 	// If local IP is not in the mesh list, use any local IP for API server
 	if localIP == "" {
 		localIP = getLocalIPAddress()
-		log.Printf("Fallback to any local IP for API server: %s", localIP)
+		if config.Verbose {
+			log.Printf("Fallback to any local IP for API server: %s", localIP)
+		}
 		if localIP == "" {
 			log.Fatal("Could not detect any local IP address")
 		}
@@ -155,8 +161,13 @@ func getLocalIPAddress() string {
 
 
 func (mc *MeshController) Run() {
-	log.Printf("Starting mesh controller on %s", mc.localIP)
-	log.Printf("Deploying to nodes: %v", mc.ipList)
+	if !mc.config.Verbose {
+		fmt.Printf("🚀 GoNet Mesh Controller\n")
+		fmt.Printf("Controller: %s | Nodes: %d | Duration: %v\n\n", mc.localIP, len(mc.ipList), mc.config.Duration)
+	} else {
+		log.Printf("Starting mesh controller on %s", mc.localIP)
+		log.Printf("Deploying to nodes: %v", mc.ipList)
+	}
 	
 	// Set up signal handling
 	sigChan := make(chan os.Signal, 1)
@@ -166,7 +177,11 @@ func (mc *MeshController) Run() {
 	mc.startAPIServer()
 	
 	// Phase 1: Deploy binaries and create services (but don't start)
-	log.Println("\n========== PHASE 1: DEPLOYMENT ==========")
+	if mc.config.Verbose {
+		log.Println("\n========== PHASE 1: DEPLOYMENT ==========")
+	} else {
+		fmt.Printf("📦 Deploying to %d nodes... ", len(mc.ipList))
+	}
 	deployDone := make(chan *workers.Results[DeployTarget])
 	
 	go func() {
@@ -192,22 +207,32 @@ func (mc *MeshController) Run() {
 	case deployResults = <-deployDone:
 		mc.handleDeploymentResults(deployResults)
 	case sig := <-sigChan:
-		log.Printf("\n⚠️  Received signal: %v", sig)
-		log.Println("Deployment interrupted. Cleaning up...")
+		if mc.config.Verbose {
+			log.Printf("\n⚠️  Received signal: %v", sig)
+			log.Println("Deployment interrupted. Cleaning up...")
+		} else {
+			fmt.Printf("\n⚠️  Interrupted. Cleaning up...\n")
+		}
 		mc.cleanup()
 		return
 	}
 	
 	// Check if deployment succeeded
 	if !deployResults.AllSucceeded() {
-		log.Printf("⚠️  Some deployments failed, but continuing with successful nodes")
-		if err := deployResults.AsError(); err != nil {
-			log.Printf("Deployment errors:\n%v", err)
+		if mc.config.Verbose {
+			log.Printf("⚠️  Some deployments failed, but continuing with successful nodes")
+			if err := deployResults.AsError(); err != nil {
+				log.Printf("Deployment errors:\n%v", err)
+			}
 		}
 	}
 	
 	// Phase 2: Start all services simultaneously
-	log.Println("\n========== PHASE 2: STARTING SERVICES ==========")
+	if mc.config.Verbose {
+		log.Println("\n========== PHASE 2: STARTING SERVICES ==========")
+	} else {
+		fmt.Printf("🚀 Starting services... ")
+	}
 	startDone := make(chan *workers.Results[DeployTarget])
 	
 	go func() {
@@ -222,7 +247,9 @@ func (mc *MeshController) Run() {
 			}
 		}
 		
-		log.Printf("Starting services on %d successfully deployed nodes...", len(successfulTargets))
+		if mc.config.Verbose {
+			log.Printf("Starting services on %d successfully deployed nodes...", len(successfulTargets))
+		}
 		
 		// Start all services concurrently
 		numWorkers := min(len(successfulTargets), 20) // Higher concurrency for starting
@@ -240,23 +267,36 @@ func (mc *MeshController) Run() {
 	case startResults = <-startDone:
 		mc.handleServiceStartResults(startResults)
 	case sig := <-sigChan:
-		log.Printf("\n⚠️  Received signal: %v", sig)
-		log.Println("Service start interrupted. Cleaning up...")
+		if mc.config.Verbose {
+			log.Printf("\n⚠️  Received signal: %v", sig)
+			log.Println("Service start interrupted. Cleaning up...")
+		} else {
+			fmt.Printf("\n⚠️  Interrupted. Cleaning up...\n")
+		}
 		mc.cleanup()
 		return
 	}
 	
 	// Log final status
 	if !startResults.AllSucceeded() {
-		log.Printf("⚠️  Some services failed to start, but monitoring active ones")
-		if err := startResults.AsError(); err != nil {
-			log.Printf("Service start errors:\n%v", err)
+		if mc.config.Verbose {
+			log.Printf("⚠️  Some services failed to start, but monitoring active ones")
+			if err := startResults.AsError(); err != nil {
+				log.Printf("Service start errors:\n%v", err)
+			}
 		}
 	}
 	
 	// Give services time to fully initialize and establish connections
-	log.Println("Waiting for services to fully initialize and establish connections...")
-	time.Sleep(15 * time.Second)
+	if mc.config.Verbose {
+		log.Println("Waiting for services to fully initialize and establish connections...")
+	} else {
+		fmt.Printf("🔄 Initializing connections... ")
+	}
+	time.Sleep(3 * time.Second)
+	if !mc.config.Verbose {
+		fmt.Printf("Done\n\n📊 Monitoring mesh performance:\n")
+	}
 	
 	// Start periodic stats display
 	ticker := time.NewTicker(5 * time.Second)
@@ -323,18 +363,30 @@ func (mc *MeshController) handleDeploymentResults(results *workers.Results[Deplo
 	
 	for _, result := range results.Items {
 		if result.Err != nil {
-			log.Printf("❌ Failed to deploy to %s: %v", result.Object.IP, result.Err)
+			if mc.config.Verbose {
+				log.Printf("❌ Failed to deploy to %s: %v", result.Object.IP, result.Err)
+			}
 			failCount++
 		} else {
-			log.Printf("✅ Successfully deployed to %s", result.Object.IP)
+			if mc.config.Verbose {
+				log.Printf("✅ Successfully deployed to %s", result.Object.IP)
+			}
 			successCount++
 		}
 	}
 	
-	log.Println("\n========== DEPLOYMENT COMPLETE ==========")
-	log.Printf("Successful deployments: %d/%d", successCount, len(results.Items))
-	if failCount > 0 {
-		log.Printf("Failed deployments: %d", failCount)
+	if mc.config.Verbose {
+		log.Println("\n========== DEPLOYMENT COMPLETE ==========")
+		log.Printf("Successful deployments: %d/%d", successCount, len(results.Items))
+		if failCount > 0 {
+			log.Printf("Failed deployments: %d", failCount)
+		}
+	} else {
+		if failCount == 0 {
+			fmt.Printf("Done (✅ %d/%d)\n", successCount, len(results.Items))
+		} else {
+			fmt.Printf("Done (✅ %d, ❌ %d)\n", successCount, failCount)
+		}
 	}
 }
 
@@ -343,28 +395,42 @@ func (mc *MeshController) handleServiceStartResults(results *workers.Results[Dep
 	successCount := 0
 	failCount := 0
 	
-	log.Println("\n========== SERVICE START RESULTS ==========")
 	for _, result := range results.Items {
 		if result.Err != nil {
-			log.Printf("[RESULT] ❌ %s: FAILED - %v", result.Object.IP, result.Err)
+			if mc.config.Verbose {
+				log.Printf("[RESULT] ❌ %s: FAILED - %v", result.Object.IP, result.Err)
+			}
 			failCount++
 		} else {
-			log.Printf("[RESULT] ✅ %s: SUCCESS", result.Object.IP)
+			if mc.config.Verbose {
+				log.Printf("[RESULT] ✅ %s: SUCCESS", result.Object.IP)
+			}
 			successCount++
 		}
 	}
 	
-	log.Println("\n========== SERVICE START SUMMARY ==========")
-	log.Printf("✅ Successful starts: %d/%d", successCount, len(results.Items))
-	if failCount > 0 {
-		log.Printf("❌ Failed starts: %d/%d", failCount, len(results.Items))
-	}
-	log.Println("==========================================")
-	
-	if successCount > 0 {
-		log.Println("Now monitoring mesh performance...")
+	if mc.config.Verbose {
+		log.Println("\n========== SERVICE START SUMMARY ==========")
+		log.Printf("✅ Successful starts: %d/%d", successCount, len(results.Items))
+		if failCount > 0 {
+			log.Printf("❌ Failed starts: %d/%d", failCount, len(results.Items))
+		}
+		log.Println("==========================================")
+		
+		if successCount > 0 {
+			log.Println("Now monitoring mesh performance...")
+		} else {
+			log.Println("⚠️  No services started successfully - check diagnostics above")
+		}
 	} else {
-		log.Println("⚠️  No services started successfully - check diagnostics above")
+		if failCount == 0 {
+			fmt.Printf("Done (✅ %d/%d)\n", successCount, len(results.Items))
+		} else {
+			fmt.Printf("Done (✅ %d, ❌ %d)\n", successCount, failCount)
+			if successCount == 0 {
+				fmt.Printf("⚠️  No services started - use --verbose for details\n")
+			}
+		}
 	}
 }
 
@@ -384,15 +450,23 @@ func (mc *MeshController) startService(ip string, index int) error {
 		}
 	}
 	
-	log.Printf("[%s] 🚀 Starting service...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] 🚀 Starting service...", ip)
+	}
 	if err := mc.execSSH(sshHost, fmt.Sprintf("systemctl start %s", serviceName), "start service"); err != nil {
-		log.Printf("[%s] ❌ Failed to start service: %v", ip, err)
+		if mc.config.Verbose {
+			log.Printf("[%s] ❌ Failed to start service: %v", ip, err)
+		}
 		return fmt.Errorf("[%s] failed to start service: %v", ip, err)
 	}
-	log.Printf("[%s] ⏳ Service start command completed, verifying...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] ⏳ Service start command completed, verifying...", ip)
+	}
 	
 	// Verify service is actually running
-	log.Printf("[%s] 🔍 Checking service health...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] 🔍 Checking service health...", ip)
+	}
 	verifyCmd := fmt.Sprintf(`
 		echo "[VERIFY] Quick service check..."
 		# Check if service is active and listening in one go
@@ -414,11 +488,15 @@ func (mc *MeshController) startService(ip string, index int) error {
 	
 	if err := mc.execSSH(sshHost, verifyCmd, "verify service health"); err != nil {
 		// Simple diagnostic - don't spam logs
-		log.Printf("[%s] ❌ Service verification failed - check service manually", ip)
+		if mc.config.Verbose {
+			log.Printf("[%s] ❌ Service verification failed - check service manually", ip)
+		}
 		return fmt.Errorf("[%s] service verification failed: %v", ip, err)
 	}
 	
-	log.Printf("[%s] ✅ SUCCESS: Service started and verified", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] ✅ SUCCESS: Service started and verified", ip)
+	}
 	return nil
 }
 
@@ -432,7 +510,9 @@ func min(a, b int) int {
 
 // Execute a remote command via SSH
 func (mc *MeshController) execSSH(sshHost, command, description string) error {
-	log.Printf("[SSH] Executing %s on %s", description, sshHost)
+	if mc.config.Verbose {
+		log.Printf("[SSH] Executing %s on %s", description, sshHost)
+	}
 	
 	// Add timeout and batch mode to fail fast if no auth
 	cmd := exec.Command("ssh", 
@@ -441,46 +521,54 @@ func (mc *MeshController) execSSH(sshHost, command, description string) error {
 		"-o", "BatchMode=yes",  // This will fail fast if no passwordless auth
 		sshHost, command)
 	
-	log.Printf("[SSH] Command: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes %s '%s'", sshHost, command)
+	if mc.config.Verbose {
+		log.Printf("[SSH] Command: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes %s '%s'", sshHost, command)
+	}
 	
 	output, err := cmd.CombinedOutput()
 	
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode := exitErr.ExitCode()
-			log.Printf("[SSH] Command failed with exit code %d", exitCode)
-			
-			// Interpret common SSH exit codes
-			switch exitCode {
-			case 255:
-				if len(output) == 0 {
-					log.Printf("[SSH] Exit 255 with no output - likely SSH connection failure (auth, network, or host unreachable)")
+		if mc.config.Verbose {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode := exitErr.ExitCode()
+				log.Printf("[SSH] Command failed with exit code %d", exitCode)
+				
+				// Interpret common SSH exit codes
+				switch exitCode {
+				case 255:
+					if len(output) == 0 {
+						log.Printf("[SSH] Exit 255 with no output - likely SSH connection failure (auth, network, or host unreachable)")
+					}
+				case 1:
+					log.Printf("[SSH] Exit 1 - command execution error")
+				case 130:
+					log.Printf("[SSH] Exit 130 - interrupted by signal")
 				}
-			case 1:
-				log.Printf("[SSH] Exit 1 - command execution error")
-			case 130:
-				log.Printf("[SSH] Exit 130 - interrupted by signal")
 			}
-		}
-		log.Printf("[SSH] Error: %v", err)
-		if len(output) > 0 {
-			log.Printf("[SSH] Output: %s", string(output))
-		} else {
-			log.Printf("[SSH] No output received")
+			log.Printf("[SSH] Error: %v", err)
+			if len(output) > 0 {
+				log.Printf("[SSH] Output: %s", string(output))
+			} else {
+				log.Printf("[SSH] No output received")
+			}
 		}
 		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
 	}
 	
-	if len(output) > 0 {
-		log.Printf("[SSH] Output: %s", strings.TrimSpace(string(output)))
+	if mc.config.Verbose {
+		if len(output) > 0 {
+			log.Printf("[SSH] Output: %s", strings.TrimSpace(string(output)))
+		}
+		log.Printf("[SSH] %s completed successfully", description)
 	}
-	log.Printf("[SSH] %s completed successfully", description)
 	return nil
 }
 
 // Execute SCP
 func (mc *MeshController) execSCP(source, dest, description string) error {
-	log.Printf("[SCP] Executing %s: %s -> %s", description, source, dest)
+	if mc.config.Verbose {
+		log.Printf("[SCP] Executing %s: %s -> %s", description, source, dest)
+	}
 	
 	cmd := exec.Command("scp", 
 		"-o", "StrictHostKeyChecking=no",
@@ -488,22 +576,28 @@ func (mc *MeshController) execSCP(source, dest, description string) error {
 		"-o", "BatchMode=yes",
 		source, dest)
 	
-	log.Printf("[SCP] Command: scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes %s %s", source, dest)
+	if mc.config.Verbose {
+		log.Printf("[SCP] Command: scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes %s %s", source, dest)
+	}
 	
 	output, err := cmd.CombinedOutput()
 	
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			log.Printf("[SCP] Command failed with exit code %d", exitErr.ExitCode())
-		}
-		log.Printf("[SCP] Error: %v", err)
-		if len(output) > 0 {
-			log.Printf("[SCP] Output: %s", string(output))
+		if mc.config.Verbose {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				log.Printf("[SCP] Command failed with exit code %d", exitErr.ExitCode())
+			}
+			log.Printf("[SCP] Error: %v", err)
+			if len(output) > 0 {
+				log.Printf("[SCP] Output: %s", string(output))
+			}
 		}
 		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
 	}
 	
-	log.Printf("[SCP] %s completed successfully", description)
+	if mc.config.Verbose {
+		log.Printf("[SCP] %s completed successfully", description)
+	}
 	return nil
 }
 
@@ -512,7 +606,9 @@ func (mc *MeshController) deployToNode(ip string, index int) error {
 }
 
 func (mc *MeshController) deployToNodeWithStart(ip string, index int, startService bool) error {
-	log.Printf("[%s] Starting deployment", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Starting deployment", ip)
+	}
 	
 	serviceName := "gonet-mesh"
 	remoteDir := "/opt/gonet"
@@ -536,41 +632,53 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 		}
 	}
 	
-	log.Printf("[%s] Deployment via SSH to %s", ip, sshHost)
+	if mc.config.Verbose {
+		log.Printf("[%s] Deployment via SSH to %s", ip, sshHost)
+	}
 	
 	// Step 0: Test SSH connectivity first
-	log.Printf("[%s] Testing SSH connectivity...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Testing SSH connectivity...", ip)
+	}
 	if err := mc.execSSH(sshHost, "echo 'SSH connection OK'", "connectivity test"); err != nil {
 		return fmt.Errorf("[%s] SSH connectivity failed: %v", ip, err)
 	}
-	log.Printf("[%s] SSH connectivity confirmed", ip)
-	
-	// Step 1: Thorough cleanup of old processes and services (individual commands)
-	log.Printf("[%s] Performing thorough cleanup...", ip)
-	
-	// Stop service if it exists
-	log.Printf("[%s] Stopping existing service...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] SSH connectivity confirmed", ip)
+		
+		// Step 1: Thorough cleanup of old processes and services (individual commands)
+		log.Printf("[%s] Performing thorough cleanup...", ip)
+		
+		// Stop service if it exists
+		log.Printf("[%s] Stopping existing service...", ip)
+	}
 	stopCmd := fmt.Sprintf("systemctl stop %s || true", serviceName)
 	if err := mc.execSSH(sshHost, stopCmd, "stop service"); err != nil {
 		return fmt.Errorf("[%s] stop service failed: %v", ip, err)
 	}
 	
 	// Disable service if it exists
-	log.Printf("[%s] Disabling existing service...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Disabling existing service...", ip)
+	}
 	disableCmd := fmt.Sprintf("systemctl disable %s || true", serviceName)
 	if err := mc.execSSH(sshHost, disableCmd, "disable service"); err != nil {
 		return fmt.Errorf("[%s] disable service failed: %v", ip, err)
 	}
 	
 	// Reset failed state (redirect stderr to avoid hanging)
-	log.Printf("[%s] Resetting failed state...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Resetting failed state...", ip)
+	}
 	resetCmd := fmt.Sprintf("systemctl reset-failed %s 2>/dev/null || true", serviceName)
 	if err := mc.execSSH(sshHost, resetCmd, "reset failed state"); err != nil {
 		return fmt.Errorf("[%s] reset failed state failed: %v", ip, err)
 	}
 	
 	// Kill processes running specifically from /opt/gonet/ path using their executable location
-	log.Printf("[%s] Finding processes running from /opt/gonet...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Finding processes running from /opt/gonet...", ip)
+	}
 	findCmd := fmt.Sprintf(`
 for pid in $(pgrep gonet 2>/dev/null || true); do
     if [ -n "$pid" ]; then
@@ -585,7 +693,9 @@ done
 		return fmt.Errorf("[%s] find processes failed: %v", ip, err)
 	}
 	
-	log.Printf("[%s] Killing processes from /opt/gonet...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Killing processes from /opt/gonet...", ip)
+	}
 	killCmd := fmt.Sprintf(`
 killed=false
 for pid in $(pgrep gonet 2>/dev/null || true); do
@@ -606,7 +716,9 @@ fi
 		return fmt.Errorf("[%s] kill processes failed: %v", ip, err)
 	}
 	
-	log.Printf("[%s] Force killing any remaining processes from /opt/gonet...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Force killing any remaining processes from /opt/gonet...", ip)
+	}
 	forceKillCmd := fmt.Sprintf(`
 killed=false
 for pid in $(pgrep gonet 2>/dev/null || true); do
@@ -628,41 +740,55 @@ fi
 	}
 	
 	// Remove files
-	log.Printf("[%s] Removing old files...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Removing old files...", ip)
+	}
 	removeCmd := fmt.Sprintf("rm -f %s /etc/systemd/system/%s.service", remoteBinary, serviceName)
 	if err := mc.execSSH(sshHost, removeCmd, "remove files"); err != nil {
 		return fmt.Errorf("[%s] remove files failed: %v", ip, err)
 	}
 	
 	// Reload systemd
-	log.Printf("[%s] Reloading systemd...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Reloading systemd...", ip)
+	}
 	reloadCmd := "systemctl daemon-reload"
 	if err := mc.execSSH(sshHost, reloadCmd, "reload systemd"); err != nil {
 		return fmt.Errorf("[%s] reload systemd failed: %v", ip, err)
 	}
 	
-	log.Printf("[%s] Cleanup completed successfully", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Cleanup completed successfully", ip)
+	}
 	
 	// Step 2: Create remote directory
-	log.Printf("[%s] Creating remote directory %s...", ip, remoteDir)
+	if mc.config.Verbose {
+		log.Printf("[%s] Creating remote directory %s...", ip, remoteDir)
+	}
 	if err := mc.execSSH(sshHost, fmt.Sprintf("mkdir -p %s", remoteDir), "create directory"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
 	
 	// Step 3: Copy binary (use the currently executing binary)
-	log.Printf("[%s] Copying binary to remote...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Copying binary to remote...", ip)
+	}
 	if err := mc.execSCP(currentBinary, fmt.Sprintf("%s:%s", sshHost, remoteBinary), "copy binary"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
 	
 	// Step 4: Make executable
-	log.Printf("[%s] Making binary executable...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Making binary executable...", ip)
+	}
 	if err := mc.execSSH(sshHost, fmt.Sprintf("chmod +x %s", remoteBinary), "make executable"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
 	
 	// Step 5: Create systemd service file
-	log.Printf("[%s] Creating systemd service...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Creating systemd service...", ip)
+	}
 	serviceContent := mc.generateSystemdUnit(remoteBinary)
 	serviceTempPath := fmt.Sprintf("/tmp/gonet-mesh-%s.service", strings.ReplaceAll(ip, ".", "_"))
 	if err := os.WriteFile(serviceTempPath, []byte(serviceContent), 0644); err != nil {
@@ -676,20 +802,28 @@ fi
 	}
 	
 	// Step 6: Reload systemd
-	log.Printf("[%s] Reloading systemd...", ip)
+	if mc.config.Verbose {
+		log.Printf("[%s] Reloading systemd...", ip)
+	}
 	if err := mc.execSSH(sshHost, "systemctl daemon-reload", "reload systemd"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
 	
 	// Step 7: Start service (optional)
 	if startService {
-		log.Printf("[%s] Starting gonet service...", ip)
+		if mc.config.Verbose {
+			log.Printf("[%s] Starting gonet service...", ip)
+		}
 		if err := mc.execSSH(sshHost, fmt.Sprintf("systemctl start %s", serviceName), "start service"); err != nil {
 			return fmt.Errorf("[%s] %v", ip, err)
 		}
-		log.Printf("[%s] ✓ Deployment and service start completed successfully", ip)
+		if mc.config.Verbose {
+			log.Printf("[%s] ✓ Deployment and service start completed successfully", ip)
+		}
 	} else {
-		log.Printf("[%s] ✓ Deployment completed successfully (service not started)", ip)
+		if mc.config.Verbose {
+			log.Printf("[%s] ✓ Deployment completed successfully (service not started)", ip)
+		}
 	}
 	return nil
 }
@@ -697,7 +831,9 @@ fi
 
 func (mc *MeshController) generateSystemdUnit(binaryPath string) string {
 	apiEndpoint := fmt.Sprintf("http://%s:%d/stats", mc.localIP, mc.config.APIPort)
-	log.Printf("Generated API endpoint for reporting: %s", apiEndpoint)
+	if mc.config.Verbose {
+		log.Printf("Generated API endpoint for reporting: %s", apiEndpoint)
+	}
 	
 	return fmt.Sprintf(`[Unit]
 Description=GoNet Mesh Testing Service
@@ -728,9 +864,13 @@ func (mc *MeshController) startAPIServer() {
 	}
 	
 	go func() {
-		log.Printf("API server listening on :%d", mc.config.APIPort)
+		if mc.config.Verbose {
+			log.Printf("API server listening on :%d", mc.config.APIPort)
+		}
 		if err := mc.httpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("API server error: %v", err)
+			if mc.config.Verbose {
+				log.Printf("API server error: %v", err)
+			}
 		}
 	}()
 }
