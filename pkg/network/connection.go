@@ -187,35 +187,49 @@ func (c *Connection) Start(ctx context.Context) error {
 func (c *Connection) startTCP(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", c.TargetIP, c.port)
 	
-	// Retry connection with shorter, more aggressive retries
+	// Retry connection indefinitely until context cancellation
 	var conn net.Conn
 	var err error
-	maxRetries := 60  // Even more retries (12 seconds worth)
 	firstAttempt := true
-	for i := 0; i < maxRetries; i++ {
-		conn, err = net.DialTimeout("tcp", addr, 500*time.Millisecond)  // Even shorter timeout
+	retryCount := 0
+	baseDelay := 200 * time.Millisecond
+	maxDelay := 2 * time.Second
+	
+	for {
+		conn, err = net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
 			if !firstAttempt {
-				log.Printf("Connection %d: Connected to %s after %d retries", c.ID, addr, i)
+				log.Printf("Connection %d: Connected to %s after %d retries", c.ID, addr, retryCount)
 			}
 			break
 		}
+		
 		if firstAttempt {
-			log.Printf("Connection %d: Initial connection to %s failed, retrying... (%v)", c.ID, addr, err)
+			log.Printf("Connection %d: Initial connection to %s failed, retrying indefinitely... (%v)", c.ID, addr, err)
 			firstAttempt = false
 		}
-		if i < maxRetries-1 {
-			// Fixed 200ms delay for faster retries
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("context cancelled while retrying connection")
-			case <-time.After(200 * time.Millisecond):
-				// Continue to next retry
-			}
+		
+		retryCount++
+		
+		// Exponential backoff with jitter to avoid thundering herd
+		delay := baseDelay
+		if retryCount > 10 {
+			// After 10 attempts, use exponential backoff up to maxDelay
+			backoffDelay := time.Duration(min(int64(baseDelay) * (1 << min(retryCount-10, 4)), int64(maxDelay)))
+			delay = backoffDelay
 		}
-	}
-	if err != nil {
-		return fmt.Errorf("failed to connect to %s after %d retries: %v", addr, maxRetries, err)
+		
+		// Log periodic status for long-running connection attempts
+		if retryCount%50 == 0 {
+			log.Printf("Connection %d: Still retrying %s (attempt %d)", c.ID, addr, retryCount)
+		}
+		
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while retrying connection to %s after %d attempts", addr, retryCount)
+		case <-time.After(delay):
+			// Continue to next retry
+		}
 	}
 	c.conn = conn
 	
@@ -284,14 +298,55 @@ func (c *Connection) startTCP(ctx context.Context) error {
 }
 
 func (c *Connection) startUDP(ctx context.Context) error {
-	serverAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", c.TargetIP, c.port))
+	addr := fmt.Sprintf("%s:%d", c.TargetIP, c.port)
+	
+	serverAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return err
 	}
 	
-	conn, err := net.DialUDP("udp", nil, serverAddr)
-	if err != nil {
-		return err
+	// Retry UDP connection indefinitely until context cancellation  
+	var conn *net.UDPConn
+	firstAttempt := true
+	retryCount := 0
+	baseDelay := 200 * time.Millisecond
+	maxDelay := 2 * time.Second
+	
+	for {
+		conn, err = net.DialUDP("udp", nil, serverAddr)
+		if err == nil {
+			if !firstAttempt {
+				log.Printf("Connection %d: UDP connected to %s after %d retries", c.ID, addr, retryCount)
+			}
+			break
+		}
+		
+		if firstAttempt {
+			log.Printf("Connection %d: Initial UDP connection to %s failed, retrying indefinitely... (%v)", c.ID, addr, err)
+			firstAttempt = false
+		}
+		
+		retryCount++
+		
+		// Exponential backoff with jitter to avoid thundering herd
+		delay := baseDelay
+		if retryCount > 10 {
+			// After 10 attempts, use exponential backoff up to maxDelay
+			backoffDelay := time.Duration(min(int64(baseDelay) * (1 << min(retryCount-10, 4)), int64(maxDelay)))
+			delay = backoffDelay
+		}
+		
+		// Log periodic status for long-running connection attempts
+		if retryCount%50 == 0 {
+			log.Printf("Connection %d: Still retrying UDP %s (attempt %d)", c.ID, addr, retryCount)
+		}
+		
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while retrying UDP connection to %s after %d attempts", addr, retryCount)
+		case <-time.After(delay):
+			// Continue to next retry
+		}
 	}
 	c.udpConn = conn
 	defer c.udpConn.Close()
@@ -413,13 +468,21 @@ func (c *Connection) tcpSenderThroughput(ctx context.Context) {
 			n, err := c.conn.Write(buffer)
 			if err != nil {
 				log.Printf("Connection %d: Write error: %v", c.ID, err)
-				// On error, flush stats and continue
+				// On error, flush stats
 				if localBytes > 0 {
 					c.bytesSent.Add(localBytes)
 					c.packetsSent.Add(localPackets)
 					localBytes = 0
 					localPackets = 0
 				}
+				
+				// Attempt to reconnect on connection errors
+				if reconnectErr := c.reconnectTCP(ctx); reconnectErr != nil {
+					log.Printf("Connection %d: Failed to reconnect: %v", c.ID, reconnectErr)
+					return // Exit on context cancellation or unrecoverable error
+				}
+				
+				// After successful reconnection, continue with next iteration
 				continue
 			}
 			writeCount++
@@ -472,6 +535,12 @@ func (c *Connection) tcpSenderPacket(ctx context.Context) {
 			// Send packet
 			n, err := c.conn.Write(packet)
 			if err != nil {
+				log.Printf("Connection %d: Packet send error: %v", c.ID, err)
+				// Attempt to reconnect on connection errors
+				if reconnectErr := c.reconnectTCP(ctx); reconnectErr != nil {
+					log.Printf("Connection %d: Failed to reconnect in packet mode: %v", c.ID, reconnectErr)
+					return // Exit on context cancellation or unrecoverable error
+				}
 				continue
 			}
 			
@@ -548,7 +617,13 @@ func (c *Connection) tcpReceiverThroughput(ctx context.Context) {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
-				return
+				log.Printf("Connection %d: Read error in throughput mode: %v", c.ID, err)
+				// Attempt to reconnect on connection errors
+				if reconnectErr := c.reconnectTCP(ctx); reconnectErr != nil {
+					log.Printf("Connection %d: Failed to reconnect in throughput receiver: %v", c.ID, reconnectErr)
+					return // Exit on context cancellation or unrecoverable error
+				}
+				continue
 			}
 			
 			// Accumulate local stats
@@ -585,7 +660,13 @@ func (c *Connection) tcpReceiverPacket(ctx context.Context) {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
-				return
+				log.Printf("Connection %d: Read error in packet mode: %v", c.ID, err)
+				// Attempt to reconnect on connection errors
+				if reconnectErr := c.reconnectTCP(ctx); reconnectErr != nil {
+					log.Printf("Connection %d: Failed to reconnect in packet receiver: %v", c.ID, reconnectErr)
+					return // Exit on context cancellation or unrecoverable error
+				}
+				continue
 			}
 			
 			if n >= 16 {
@@ -1004,4 +1085,97 @@ func (c *Connection) periodicStatsUpdater(ctx context.Context) {
 			c.updateStats()
 		}
 	}
+}
+
+// reconnectTCP handles reconnection when the current TCP connection fails
+func (c *Connection) reconnectTCP(ctx context.Context) error {
+	// Close the existing broken connection
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+		c.tcpConn = nil
+	}
+	
+	log.Printf("Connection %d: Attempting to reconnect to %s after connection failure", c.ID, c.TargetIP)
+	
+	addr := fmt.Sprintf("%s:%d", c.TargetIP, c.port)
+	
+	// Use the same indefinite retry logic as initial connection
+	var conn net.Conn
+	var err error
+	firstAttempt := true
+	retryCount := 0
+	baseDelay := 200 * time.Millisecond
+	maxDelay := 2 * time.Second
+	
+	for {
+		conn, err = net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			if !firstAttempt {
+				log.Printf("Connection %d: Reconnected to %s after %d retries", c.ID, addr, retryCount)
+			}
+			break
+		}
+		
+		if firstAttempt {
+			log.Printf("Connection %d: Reconnection to %s failed, retrying indefinitely... (%v)", c.ID, addr, err)
+			firstAttempt = false
+		}
+		
+		retryCount++
+		
+		// Exponential backoff with jitter to avoid thundering herd
+		delay := baseDelay
+		if retryCount > 10 {
+			// After 10 attempts, use exponential backoff up to maxDelay
+			backoffDelay := time.Duration(min(int64(baseDelay) * (1 << min(retryCount-10, 4)), int64(maxDelay)))
+			delay = backoffDelay
+		}
+		
+		// Log periodic status for long-running reconnection attempts
+		if retryCount%25 == 0 {
+			log.Printf("Connection %d: Still retrying reconnection to %s (attempt %d)", c.ID, addr, retryCount)
+		}
+		
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while retrying reconnection to %s after %d attempts", addr, retryCount)
+		case <-time.After(delay):
+			// Continue to next retry
+		}
+	}
+	
+	// Update connection references
+	c.conn = conn
+	
+	// Configure TCP socket for maximum throughput  
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		c.tcpConn = tcpConn
+		
+		// Apply Linux-specific optimizations in optimized mode
+		if c.UseOptimized {
+			if err := c.applyOptimizedTCPOptions(tcpConn); err != nil {
+				log.Printf("Warning: Could not apply optimized TCP options on reconnect: %v", err)
+			}
+		}
+		
+		// Set socket buffer sizes for 100Gbps networks
+		if c.throughputMode {
+			// Use large buffers based on configuration
+			writeBuf := c.BufferSize * 4 // 4x buffer size for socket buffers
+			if writeBuf < 16777216 {
+				writeBuf = 16777216 // Minimum 16MB
+			}
+			if writeBuf > 134217728 {
+				writeBuf = 134217728 // Max 128MB
+			}
+			tcpConn.SetWriteBuffer(writeBuf)
+			tcpConn.SetReadBuffer(writeBuf)
+			
+			// Configure TCP options for high throughput
+			tcpConn.SetNoDelay(c.TCPNoDelay)
+		}
+	}
+	
+	return nil
 }
