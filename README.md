@@ -1,6 +1,7 @@
 # GoSmesh - Network Performance Testing Tool
 
 GoSmesh is a distributed network testing tool that measures network performance metrics in a full mesh topology. It supports both UDP and TCP protocols and provides comprehensive reporting with anomaly detection.
+Note: This software is not affiliated with WEKA and meant as a smoke testing tool provided As-Is with MIT license. 
 
 ## Features
 
