@@ -22,25 +22,25 @@ const (
 
 // io_uring operation codes
 const (
-	IORING_OP_NOP       = 0
-	IORING_OP_READV     = 1
-	IORING_OP_WRITEV    = 2
-	IORING_OP_READ      = 22
-	IORING_OP_WRITE     = 23
-	IORING_OP_SEND      = 26
-	IORING_OP_RECV      = 27
-	IORING_OP_SENDMSG   = 9
-	IORING_OP_RECVMSG   = 10
-	IORING_OP_ACCEPT    = 13
-	IORING_OP_CONNECT   = 16
+	IORING_OP_NOP     = 0
+	IORING_OP_READV   = 1
+	IORING_OP_WRITEV  = 2
+	IORING_OP_READ    = 22
+	IORING_OP_WRITE   = 23
+	IORING_OP_SEND    = 26
+	IORING_OP_RECV    = 27
+	IORING_OP_SENDMSG = 9
+	IORING_OP_RECVMSG = 10
+	IORING_OP_ACCEPT  = 13
+	IORING_OP_CONNECT = 16
 )
 
 // io_uring setup flags
 const (
-	IORING_SETUP_IOPOLL     = 1 << 0
-	IORING_SETUP_SQPOLL     = 1 << 1
-	IORING_SETUP_SQ_AFF     = 1 << 2
-	IORING_SETUP_CQSIZE     = 1 << 3
+	IORING_SETUP_IOPOLL        = 1 << 0
+	IORING_SETUP_SQPOLL        = 1 << 1
+	IORING_SETUP_SQ_AFF        = 1 << 2
+	IORING_SETUP_CQSIZE        = 1 << 3
 	IORING_SETUP_SINGLE_ISSUER = 1 << 12
 	IORING_SETUP_DEFER_TASKRUN = 1 << 13
 )
@@ -113,31 +113,31 @@ type ioUringCQE struct {
 
 // IOUringConnection wraps a connection with io_uring support
 type IOUringConnection struct {
-	conn      net.Conn
-	fd        int
-	ring      *IOUring
+	conn       net.Conn
+	fd         int
+	ring       *IOUring
 	bufferPool *sync.Pool
-	stats     *network.ConnectionStats
+	stats      *network.ConnectionStats
 }
 
 // IOUring represents an io_uring instance
 type IOUring struct {
-	fd          int
-	sqRing      []byte
-	cqRing      []byte
-	sqes        []ioUringSQE
-	params      ioUringParams
-	sqHead      *uint32
-	sqTail      *uint32
-	sqMask      uint32
-	sqArray     []uint32
-	cqHead      *uint32
-	cqTail      *uint32
-	cqMask      uint32
-	cqes        []ioUringCQE
-	pendingOps  map[uint64]chan IOResult
-	opCounter   uint64
-	mu          sync.Mutex
+	fd         int
+	sqRing     []byte
+	cqRing     []byte
+	sqes       []ioUringSQE
+	params     ioUringParams
+	sqHead     *uint32
+	sqTail     *uint32
+	sqMask     uint32
+	sqArray    []uint32
+	cqHead     *uint32
+	cqTail     *uint32
+	cqMask     uint32
+	cqes       []ioUringCQE
+	pendingOps map[uint64]chan IOResult
+	opCounter  uint64
+	mu         sync.Mutex
 }
 
 // IOResult represents the result of an async I/O operation
@@ -212,7 +212,7 @@ func (r *IOUring) mapRings() error {
 	r.sqHead = (*uint32)(unsafe.Pointer(&r.sqRing[r.params.sqOff.head]))
 	r.sqTail = (*uint32)(unsafe.Pointer(&r.sqRing[r.params.sqOff.tail]))
 	r.sqMask = *(*uint32)(unsafe.Pointer(&r.sqRing[r.params.sqOff.ringMask]))
-	
+
 	arrayPtr := unsafe.Add(unsafe.Pointer(&r.sqRing[0]), r.params.sqOff.array)
 	r.sqArray = unsafe.Slice((*uint32)(arrayPtr), r.params.sqEntries)
 
@@ -257,7 +257,7 @@ func (r *IOUring) SubmitSend(fd int, buf []byte) (chan IOResult, error) {
 	sqe.flags = 0
 
 	r.sqArray[idx] = uint32(idx)
-	
+
 	// Memory barrier
 	_ = *r.sqTail
 	*r.sqTail = tail + 1
@@ -293,7 +293,7 @@ func (r *IOUring) SubmitRecv(fd int, buf []byte) (chan IOResult, error) {
 	sqe.flags = 0
 
 	r.sqArray[idx] = uint32(idx)
-	
+
 	// Memory barrier
 	_ = *r.sqTail
 	*r.sqTail = tail + 1
@@ -427,12 +427,12 @@ func (c *IOUringConnection) SendAsync(data []byte) (chan IOResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	_, err = c.ring.Submit()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
@@ -442,19 +442,19 @@ func (c *IOUringConnection) RecvAsync(buf []byte) (chan IOResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	_, err = c.ring.Submit()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return result, nil
 }
 
 // BatchSend sends multiple buffers in a batch
 func (c *IOUringConnection) BatchSend(buffers [][]byte) ([]chan IOResult, error) {
 	results := make([]chan IOResult, len(buffers))
-	
+
 	for i, buf := range buffers {
 		result, err := c.ring.SubmitSend(c.fd, buf)
 		if err != nil {
@@ -462,12 +462,12 @@ func (c *IOUringConnection) BatchSend(buffers [][]byte) ([]chan IOResult, error)
 		}
 		results[i] = result
 	}
-	
+
 	_, err := c.ring.Submit()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return results, nil
 }
 

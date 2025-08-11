@@ -11,37 +11,37 @@ import (
 // Socket options for hardware offloading
 const (
 	// TCP offload options
-	TCP_NODELAY     = 1
-	TCP_CORK        = 3
-	TCP_QUICKACK    = 12
+	TCP_NODELAY      = 1
+	TCP_CORK         = 3
+	TCP_QUICKACK     = 12
 	TCP_DEFER_ACCEPT = 9
-	
+
 	// Socket offload options
-	SO_ZEROCOPY     = 60
-	SO_BUSY_POLL    = 46
-	SO_INCOMING_CPU = 49
-	SO_ATTACH_BPF   = 50
+	SO_ZEROCOPY              = 60
+	SO_BUSY_POLL             = 46
+	SO_INCOMING_CPU          = 49
+	SO_ATTACH_BPF            = 50
 	SO_ATTACH_REUSEPORT_EBPF = 52
-	
+
 	// Ethtool commands for offload configuration
-	ETHTOOL_GSET     = 0x00000001
-	ETHTOOL_SSET     = 0x00000002
-	ETHTOOL_GRXCSUM  = 0x00000014
-	ETHTOOL_SRXCSUM  = 0x00000015
-	ETHTOOL_GTXCSUM  = 0x00000016
-	ETHTOOL_STXCSUM  = 0x00000017
-	ETHTOOL_GSG      = 0x00000018
-	ETHTOOL_SSG      = 0x00000019
-	ETHTOOL_GTSO     = 0x0000001e
-	ETHTOOL_STSO     = 0x0000001f
-	ETHTOOL_GGSO     = 0x00000023
-	ETHTOOL_SGSO     = 0x00000024
-	ETHTOOL_GGRO     = 0x0000002b
-	ETHTOOL_SGRO     = 0x0000002c
-	
+	ETHTOOL_GSET    = 0x00000001
+	ETHTOOL_SSET    = 0x00000002
+	ETHTOOL_GRXCSUM = 0x00000014
+	ETHTOOL_SRXCSUM = 0x00000015
+	ETHTOOL_GTXCSUM = 0x00000016
+	ETHTOOL_STXCSUM = 0x00000017
+	ETHTOOL_GSG     = 0x00000018
+	ETHTOOL_SSG     = 0x00000019
+	ETHTOOL_GTSO    = 0x0000001e
+	ETHTOOL_STSO    = 0x0000001f
+	ETHTOOL_GGSO    = 0x00000023
+	ETHTOOL_SGSO    = 0x00000024
+	ETHTOOL_GGRO    = 0x0000002b
+	ETHTOOL_SGRO    = 0x0000002c
+
 	// ioctl commands
-	SIOCETHTOOL = 0x8946
-	SIOCGIFNAME = 0x8910
+	SIOCETHTOOL  = 0x8946
+	SIOCGIFNAME  = 0x8910
 	SIOCGIFFLAGS = 0x8913
 	SIOCSIFFLAGS = 0x8914
 )
@@ -247,10 +247,10 @@ func (n *NetworkOffloader) OptimizeUDPSocket(conn *net.UDPConn) error {
 
 // MultiQueueNIC manages multiple NIC queues for better parallelism
 type MultiQueueNIC struct {
-	ifaceName   string
-	numQueues   int
-	queueMap    map[int]int // CPU to queue mapping
-	rssKey      []byte
+	ifaceName string
+	numQueues int
+	queueMap  map[int]int // CPU to queue mapping
+	rssKey    []byte
 }
 
 // NewMultiQueueNIC creates a multi-queue NIC manager
@@ -278,7 +278,7 @@ func (m *MultiQueueNIC) detectQueues() error {
 	// Read from sysfs
 	// This is a simplified implementation
 	m.numQueues = runtime.NumCPU() // Assume one queue per CPU
-	
+
 	// Map CPUs to queues
 	for i := 0; i < m.numQueues; i++ {
 		m.queueMap[i] = i
@@ -297,7 +297,7 @@ func (m *MultiQueueNIC) configureRSS() error {
 
 	// Configure indirection table
 	// This would normally use ethtool or device-specific APIs
-	
+
 	return nil
 }
 
@@ -319,7 +319,7 @@ type ZeroCopySender struct {
 // NewZeroCopySender creates a zero-copy sender
 func NewZeroCopySender(conn net.Conn) (*ZeroCopySender, error) {
 	var fd int
-	
+
 	switch c := conn.(type) {
 	case *net.TCPConn:
 		file, err := c.File()
@@ -397,7 +397,7 @@ func (b *BatchSender) Flush() error {
 	}
 
 	_, err := b.conn.Write(combined)
-	
+
 	// Reset batch
 	b.buffers = b.buffers[:0]
 	b.totalBytes = 0

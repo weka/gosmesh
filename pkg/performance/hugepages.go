@@ -19,17 +19,17 @@ const (
 	HUGEPAGE_1GB = 1024 * 1024 * 1024
 
 	// mmap flags for huge pages
-	MAP_HUGETLB   = 0x40000
-	MAP_HUGE_2MB  = 21 << 26
-	MAP_HUGE_1GB  = 30 << 26
+	MAP_HUGETLB  = 0x40000
+	MAP_HUGE_2MB = 21 << 26
+	MAP_HUGE_1GB = 30 << 26
 	// MAP_POPULATE  = 0x8000  // Commented out - defined in syscall_linux.go
-	MAP_LOCKED    = 0x2000
-	
+	MAP_LOCKED = 0x2000
+
 	// NUMA memory policies
-	MPOL_DEFAULT  = 0
-	MPOL_BIND     = 2
+	MPOL_DEFAULT    = 0
+	MPOL_BIND       = 2
 	MPOL_INTERLEAVE = 3
-	MPOL_LOCAL    = 4
+	MPOL_LOCAL      = 4
 )
 
 // HugePageAllocator manages huge page allocations
@@ -51,20 +51,20 @@ type CacheAlignedStats struct {
 	latencySum   uint64
 	latencyCount uint64
 	maxLatency   uint64
-	
+
 	// Padding to next cache line
 	_ [64 - 8*8]byte
-	
+
 	// Second cache line for less frequently accessed stats
-	minLatency   uint64
-	jitterSum    uint64
-	jitterCount  uint64
-	lostPackets  uint64
-	duplicates   uint64
-	outOfOrder   uint64
-	throughput   uint64
-	timestamp    uint64
-	
+	minLatency  uint64
+	jitterSum   uint64
+	jitterCount uint64
+	lostPackets uint64
+	duplicates  uint64
+	outOfOrder  uint64
+	throughput  uint64
+	timestamp   uint64
+
 	// Padding to next cache line
 	_ [64 - 8*8]byte
 }
@@ -115,7 +115,7 @@ func (h *HugePageAllocator) checkHugePages() error {
 // allocateHugePage allocates a single huge page
 func (h *HugePageAllocator) allocateHugePage() ([]byte, error) {
 	flags := syscall.MAP_PRIVATE | syscall.MAP_ANONYMOUS | MAP_HUGETLB | system.MAP_POPULATE | MAP_LOCKED
-	
+
 	// Add huge page size flag
 	if h.pageSize == HUGEPAGE_2MB {
 		flags |= MAP_HUGE_2MB
@@ -143,7 +143,7 @@ func (h *HugePageAllocator) GetBuffer(size int) []byte {
 	if size > h.pageSize {
 		return nil
 	}
-	
+
 	// Simple allocation from first available page
 	// In production, implement proper memory management
 	if h.usedPages > 0 && len(h.mappings) > 0 {
@@ -152,7 +152,7 @@ func (h *HugePageAllocator) GetBuffer(size int) []byte {
 			return page[:size]
 		}
 	}
-	
+
 	return nil
 }
 
@@ -190,7 +190,7 @@ func NewNUMAMemory(size int, node int) (*NUMAMemory, error) {
 
 	// Allocate memory on specific NUMA node
 	data := make([]byte, size)
-	
+
 	// Touch pages to ensure allocation on correct node
 	for i := 0; i < len(data); i += 4096 {
 		data[i] = 0
@@ -204,10 +204,10 @@ func NewNUMAMemory(size int, node int) (*NUMAMemory, error) {
 func (n *NUMAMemory) setNUMAPolicy() error {
 	// Lock thread to CPU
 	runtime.LockOSThread()
-	
+
 	// Create node mask
 	var nodemask uint64 = 1 << uint(n.node)
-	
+
 	// Set memory policy to bind to specific node
 	_, _, errno := syscall.Syscall6(
 		syscall.SYS_SET_MEMPOLICY,
@@ -216,11 +216,11 @@ func (n *NUMAMemory) setNUMAPolicy() error {
 		8, // maxnode
 		0, 0, 0,
 	)
-	
+
 	if errno != 0 {
 		return fmt.Errorf("set_mempolicy failed: %v", errno)
 	}
-	
+
 	return nil
 }
 
@@ -300,7 +300,7 @@ func (p *OptimizedBufferPool) Put(buf []byte) {
 	if len(buf) != p.bufSize {
 		return
 	}
-	
+
 	select {
 	case p.buffers <- buf:
 		// Buffer returned to pool
@@ -321,11 +321,11 @@ func (p *OptimizedBufferPool) Close() error {
 func AlignedAlloc(size int) []byte {
 	// Allocate with extra space for alignment
 	buf := make([]byte, size+64)
-	
+
 	// Find aligned offset
 	ptr := uintptr(unsafe.Pointer(&buf[0]))
 	offset := int((64 - (ptr % 64)) % 64)
-	
+
 	// Return aligned slice
 	return buf[offset : offset+size]
 }

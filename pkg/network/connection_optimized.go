@@ -6,12 +6,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"math"
 	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"golang.org/x/sys/unix"
 	"time"
 	"unsafe"
 )
@@ -26,7 +26,7 @@ var (
 			return &buf
 		},
 	}
-	
+
 	megaBufferPool = sync.Pool{
 		New: func() interface{} {
 			// 4MB buffers for extreme throughput
@@ -38,42 +38,42 @@ var (
 
 type OptimizedConnection struct {
 	*Connection
-	
+
 	// Zero-copy support
-	useSendfile    bool
-	useZeroCopy    bool
-	
+	useSendfile bool
+	useZeroCopy bool
+
 	// Ring buffer for lock-free stats
-	statsRing      *RingBuffer
-	
+	statsRing *RingBuffer
+
 	// Multiple workers per connection
-	NumWorkers     int
-	
+	NumWorkers int
+
 	// TCP optimizations
-	tcpMSS         int
-	TCPCork        bool
-	
+	tcpMSS  int
+	TCPCork bool
+
 	// Socket FD for advanced operations
-	socketFD       int
+	socketFD int
 }
 
 // NewOptimizedConnection creates a new optimized connection with advanced Linux features
 func NewOptimizedConnection(localIP, targetIP string, port int, protocol string, packetSize, pps, id int) *OptimizedConnection {
 	// Create the base connection first
 	baseConn := NewConnection(localIP, targetIP, port, protocol, packetSize, pps, id)
-	
+
 	// Create optimized connection that embeds the base connection
 	optimized := &OptimizedConnection{
-		Connection:   baseConn,
-		useSendfile:  false, // Will be enabled after connection establishment
-		useZeroCopy:  false, // Will be enabled after connection establishment
-		statsRing:    NewRingBuffer(4096), // 4K samples ring buffer
-		NumWorkers:   4, // Default to 4 workers per connection
-		tcpMSS:       9000, // Jumbo frame MSS
-		TCPCork:      false, // Will be set based on configuration
-		socketFD:     -1, // Will be set after connection establishment
+		Connection:  baseConn,
+		useSendfile: false,               // Will be enabled after connection establishment
+		useZeroCopy: false,               // Will be enabled after connection establishment
+		statsRing:   NewRingBuffer(4096), // 4K samples ring buffer
+		NumWorkers:  4,                   // Default to 4 workers per connection
+		tcpMSS:      9000,                // Jumbo frame MSS
+		TCPCork:     false,               // Will be set based on configuration
+		socketFD:    -1,                  // Will be set after connection establishment
 	}
-	
+
 	return optimized
 }
 
@@ -85,10 +85,10 @@ func (c *Connection) applyOptimizedTCPOptions(tcpConn *net.TCPConn) error {
 
 // RingBuffer for lock-free statistics updates
 type RingBuffer struct {
-	buffer   []StatsSample
-	head     atomic.Uint64
-	tail     atomic.Uint64
-	mask     uint64
+	buffer []StatsSample
+	head   atomic.Uint64
+	tail   atomic.Uint64
+	mask   uint64
 }
 
 type StatsSample struct {
@@ -109,11 +109,11 @@ func NewRingBuffer(size int) *RingBuffer {
 func (rb *RingBuffer) Push(sample StatsSample) bool {
 	head := rb.head.Load()
 	tail := rb.tail.Load()
-	
+
 	if head-tail >= uint64(len(rb.buffer)) {
 		return false // Buffer full
 	}
-	
+
 	rb.buffer[head&rb.mask] = sample
 	rb.head.Add(1)
 	return true
@@ -122,11 +122,11 @@ func (rb *RingBuffer) Push(sample StatsSample) bool {
 func (rb *RingBuffer) Pop() (StatsSample, bool) {
 	tail := rb.tail.Load()
 	head := rb.head.Load()
-	
+
 	if tail >= head {
 		return StatsSample{}, false
 	}
-	
+
 	sample := rb.buffer[tail&rb.mask]
 	rb.tail.Add(1)
 	return sample, true
@@ -136,7 +136,7 @@ func (rb *RingBuffer) Pop() (StatsSample, bool) {
 func GetSocketFD(conn net.Conn) (int, error) {
 	var fd int
 	var err error
-	
+
 	switch c := conn.(type) {
 	case *net.TCPConn:
 		file, err := c.File()
@@ -155,7 +155,7 @@ func GetSocketFD(conn net.Conn) (int, error) {
 	default:
 		return 0, fmt.Errorf("unsupported connection type")
 	}
-	
+
 	return fd, err
 }
 
@@ -167,24 +167,24 @@ func SetTCPOptions(conn *net.TCPConn, throughputMode bool) error {
 		return err
 	}
 	defer file.Close()
-	
+
 	fd := int(file.Fd())
-	
+
 	// Set socket buffer sizes to 16MB for 100Gbps networks
 	bufSize := 16777216 // 16MB
 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, bufSize)
 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, bufSize)
-	
+
 	if throughputMode {
 		// Enable TCP_CORK for better batching
 		unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_CORK, 1)
-		
+
 		// Disable TCP_NODELAY for throughput
 		unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 0)
-		
+
 		// Set larger MSS if possible
 		unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_MAXSEG, 9000)
-		
+
 		// Enable TCP_DEFER_ACCEPT to reduce latency
 		unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_DEFER_ACCEPT, 1)
 	} else {
@@ -192,14 +192,14 @@ func SetTCPOptions(conn *net.TCPConn, throughputMode bool) error {
 		unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
 		unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_QUICKACK, 1)
 	}
-	
+
 	// Enable SO_ZEROCOPY if available (Linux 4.14+)
 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ZEROCOPY, 1)
-	
+
 	// Set CPU affinity for the socket
 	cpu := runtime.NumCPU() - 1
 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_INCOMING_CPU, cpu)
-	
+
 	return nil
 }
 
@@ -208,35 +208,35 @@ func (c *OptimizedConnection) OptimizedTCPSender(ctx context.Context) {
 	// Pin to CPU
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	
+
 	// Get huge buffer from pool
 	bufPtr := megaBufferPool.Get().(*[]byte)
 	buffer := *bufPtr
 	defer megaBufferPool.Put(bufPtr)
-	
+
 	// Fill buffer once with pattern
 	for i := range buffer {
 		buffer[i] = byte(i & 0xFF)
 	}
-	
+
 	// Use multiple goroutines for sending
 	numWorkers := c.NumWorkers
 	if numWorkers == 0 {
 		numWorkers = runtime.NumCPU()
 	}
-	
+
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
-	
+
 	// Create a channel for coordinating sends
 	sendChan := make(chan []byte, numWorkers*2)
-	
+
 	// Start sender workers
 	for i := 0; i < numWorkers; i++ {
 		go func(workerID int) {
 			defer wg.Done()
 			runtime.LockOSThread() // Pin each worker to a thread
-			
+
 			for {
 				select {
 				case <-ctx.Done():
@@ -245,14 +245,14 @@ func (c *OptimizedConnection) OptimizedTCPSender(ctx context.Context) {
 					if data == nil {
 						return
 					}
-					
+
 					// Try zero-copy send first
 					n, err := c.sendZeroCopy(data)
 					if err != nil {
 						// Fallback to regular send
 						n, err = c.conn.Write(data)
 					}
-					
+
 					if err == nil {
 						// Update stats using ring buffer (lock-free)
 						c.statsRing.Push(StatsSample{
@@ -265,7 +265,7 @@ func (c *OptimizedConnection) OptimizedTCPSender(ctx context.Context) {
 			}
 		}(i)
 	}
-	
+
 	// Feed data to workers
 	for {
 		select {
@@ -285,13 +285,13 @@ func (c *OptimizedConnection) sendZeroCopy(data []byte) (int, error) {
 	if c.socketFD <= 0 {
 		return 0, fmt.Errorf("invalid socket FD")
 	}
-	
+
 	// Use MSG_ZEROCOPY flag (Linux 4.14+)
 	err := unix.Send(c.socketFD, data, unix.MSG_ZEROCOPY|unix.MSG_DONTWAIT)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	return len(data), nil
 }
 
@@ -299,37 +299,37 @@ func (c *OptimizedConnection) sendZeroCopy(data []byte) (int, error) {
 func (c *OptimizedConnection) OptimizedUDPSender(ctx context.Context) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	
+
 	// Maximum UDP packet size (jumbo frames)
 	packetSize := 9000
 	if c.packetSize > packetSize {
 		packetSize = c.packetSize
 	}
-	
+
 	// Prepare multiple messages for sendmmsg
 	const batchSize = 64
 	messages := make([]Mmsghdr, batchSize)
 	iovecs := make([]unix.Iovec, batchSize)
 	buffers := make([][]byte, batchSize)
-	
+
 	for i := 0; i < batchSize; i++ {
 		buffers[i] = make([]byte, packetSize)
 		// Fill with pattern
 		for j := range buffers[i] {
 			buffers[i][j] = byte((i + j) & 0xFF)
 		}
-		
+
 		iovecs[i] = unix.Iovec{
 			Base: &buffers[i][0],
 			Len:  uint64(len(buffers[i])),
 		}
-		
+
 		messages[i].Msgvec.Iov = &iovecs[i]
 		messages[i].Msgvec.Iovlen = 1
 	}
-	
+
 	sequenceNum := uint64(0)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -340,7 +340,7 @@ func (c *OptimizedConnection) OptimizedUDPSender(ctx context.Context) {
 				sequenceNum++
 				binary.BigEndian.PutUint64(buffers[i][0:8], sequenceNum)
 			}
-			
+
 			// Send batch of messages
 			n, err := sendmmsg(c.socketFD, messages, 0)
 			if err == nil && n > 0 {
@@ -372,15 +372,15 @@ func sendmmsg(fd int, messages []Mmsghdr, flags int) (int, error) {
 		0,
 		0,
 	)
-	
+
 	if err != 0 {
 		return 0, err
 	}
-	
+
 	return int(n), nil
 }
 
-// recvmmsg syscall wrapper  
+// recvmmsg syscall wrapper
 func recvmmsg(fd int, messages []Mmsghdr, flags int, timeout *unix.Timespec) (int, error) {
 	n, _, err := unix.Syscall6(
 		unix.SYS_RECVMMSG,
@@ -391,11 +391,11 @@ func recvmmsg(fd int, messages []Mmsghdr, flags int, timeout *unix.Timespec) (in
 		uintptr(unsafe.Pointer(timeout)),
 		0,
 	)
-	
+
 	if err != 0 {
 		return 0, err
 	}
-	
+
 	return int(n), nil
 }
 
@@ -403,22 +403,22 @@ func recvmmsg(fd int, messages []Mmsghdr, flags int, timeout *unix.Timespec) (in
 func (c *OptimizedConnection) ProcessStatsRing() {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		var totalBytes int64
 		var totalPackets int64
-		
+
 		// Drain the ring buffer
 		for {
 			sample, ok := c.statsRing.Pop()
 			if !ok {
 				break
 			}
-			
+
 			totalBytes += sample.bytes
 			totalPackets += sample.packets
 		}
-		
+
 		if totalBytes > 0 {
 			c.bytesSent.Add(totalBytes)
 			c.packetsSent.Add(totalPackets)

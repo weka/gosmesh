@@ -16,10 +16,10 @@ type IOResult struct {
 	Error error
 }
 type CacheAlignedStats struct {
-	bytesSent    uint64
-	packetsSent  uint64
-	bytesRecv    uint64
-	packetsRecv  uint64
+	bytesSent   uint64
+	packetsSent uint64
+	bytesRecv   uint64
+	packetsRecv uint64
 }
 
 const HUGEPAGE_2MB = 2 * 1024 * 1024

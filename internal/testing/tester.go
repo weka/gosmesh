@@ -14,7 +14,6 @@ import (
 	"github.com/weka/gosmesh/pkg/network"
 )
 
-
 type NetworkTester struct {
 	localIP        string
 	targetIPs      []string
@@ -32,41 +31,41 @@ type NetworkTester struct {
 
 	connections []*network.Connection
 	mu          sync.RWMutex
-	
+
 	startTime time.Time
 	endTime   time.Time
-	
+
 	// Optimization flags
 	UseOptimized    bool
 	EnableIOUring   bool
 	EnableHugePages bool
 	EnableOffload   bool
-	
+
 	// Performance tuning parameters
-	BufferSize     int
-	SendBatchSize  int
-	RecvBatchSize  int
-	NumQueues      int
-	BusyPollUsecs  int
-	TCPCork        bool
-	TCPQuickAck    bool
-	TCPNoDelay     bool
-	MemArenaSize   int
-	RingSize       int
-	NumWorkers     int
-	CPUList        string
-	
+	BufferSize    int
+	SendBatchSize int
+	RecvBatchSize int
+	NumQueues     int
+	BusyPollUsecs int
+	TCPCork       bool
+	TCPQuickAck   bool
+	TCPNoDelay    bool
+	MemArenaSize  int
+	RingSize      int
+	NumWorkers    int
+	CPUList       string
+
 	// API reporting
-	apiEndpoint    string
-	apiReportIP    string
-	apiTicker      *time.Ticker
+	apiEndpoint string
+	apiReportIP string
+	apiTicker   *time.Ticker
 }
 
-func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int, 
+func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int,
 	duration, reportInterval time.Duration, packetSize, port, pps int) *NetworkTester {
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &NetworkTester{
 		localIP:        localIP,
 		targetIPs:      ips,
@@ -84,13 +83,13 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 
 func (nt *NetworkTester) Start() error {
 	nt.startTime = time.Now()
-	
+
 	// Start server
 	server := network.NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("failed to start server: %v", err)
 	}
-	
+
 	nt.wg.Add(1)
 	go func() {
 		defer nt.wg.Done()
@@ -108,14 +107,14 @@ func (nt *NetworkTester) Start() error {
 		if targetIP == nt.localIP {
 			continue // Skip self
 		}
-		
+
 		for i := 0; i < nt.concurrency; i++ {
 			// Create connection
 			conn := network.NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
-			
+
 			// Set optimization flag
 			conn.UseOptimized = nt.UseOptimized
-			
+
 			// Apply performance tuning parameters
 			if nt.BufferSize > 0 {
 				conn.BufferSize = nt.BufferSize
@@ -130,7 +129,7 @@ func (nt *NetworkTester) Start() error {
 			conn.TCPNoDelay = nt.TCPNoDelay
 			conn.BusyPollUsecs = nt.BusyPollUsecs
 			nt.connections = append(nt.connections, conn)
-			
+
 			// Start connection goroutine
 			nt.wg.Add(1)
 			go func(c *network.Connection) {
@@ -145,7 +144,7 @@ func (nt *NetworkTester) Start() error {
 	// Start periodic reporting
 	nt.wg.Add(1)
 	go nt.periodicReporter()
-	
+
 	// Start API reporting if configured
 	if nt.apiEndpoint != "" {
 		nt.startAPIReporter()
@@ -185,33 +184,33 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 
 	elapsed := time.Since(nt.startTime)
 	report := fmt.Sprintf("\n=== Periodic Report (Elapsed: %v) ===\n", elapsed.Round(time.Second))
-	
+
 	throughputMode := nt.pps <= 0 // Check if in throughput mode
-	
+
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
 		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.TargetIP, conn.ID, nt.protocol)
-		
+
 		// Show packet loss only for UDP in packet mode
 		if throughputMode {
 			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (throughput mode)\n", stats.PacketsSent)
 		} else if nt.protocol == "tcp" {
 			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (use UDP for packet loss testing)\n", stats.PacketsSent)
 		} else {
-			report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n", 
+			report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n",
 				stats.PacketsSent, stats.PacketsReceived, stats.PacketsLost, stats.LossRate)
 		}
-		
+
 		// Show RTT/Jitter only in packet mode
 		if throughputMode {
 			report += fmt.Sprintf("  Throughput: %.2f Mbps | RTT/Jitter: Not measured (throughput mode)\n", stats.ThroughputMbps)
 		} else {
 			report += fmt.Sprintf("  Throughput: %.2f Mbps | Avg RTT: %.2f ms | Jitter: %.2f ms\n",
 				stats.ThroughputMbps, stats.AvgRTTMs, stats.JitterMs)
-			report += fmt.Sprintf("  Min RTT: %.2f ms | Max RTT: %.2f ms\n", 
+			report += fmt.Sprintf("  Min RTT: %.2f ms | Max RTT: %.2f ms\n",
 				stats.MinRTTMs, stats.MaxRTTMs)
 		}
-		
+
 		// Show reconnection stats
 		if stats.ReconnectCount > 0 {
 			timeSinceReconnect := time.Since(stats.LastReconnectTime).Round(time.Second)
@@ -220,7 +219,7 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 			report += fmt.Sprintf("  Reconnections: 0\n")
 		}
 	}
-	
+
 	return report
 }
 
@@ -232,7 +231,7 @@ func (nt *NetworkTester) EnableAPIReporting(endpoint, reportIP string) {
 func (nt *NetworkTester) startAPIReporter() {
 	nt.apiTicker = time.NewTicker(1 * time.Second)
 	nt.wg.Add(1)
-	
+
 	go func() {
 		defer nt.wg.Done()
 		for {
@@ -256,26 +255,26 @@ func (nt *NetworkTester) sendAPIReport() {
 	var avgRTT, avgJitter float64
 	var connCount int
 	var rttCount int // Count connections that actually have RTT data
-	
+
 	// Reconnection stats
 	var totalReconnects int64
 	targetReconnects := make(map[string]int64)
-	
+
 	nt.mu.RLock()
 	throughputMode := nt.pps <= 0 // Check if we're in throughput mode
-	
+
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
 		totalThroughput += stats.ThroughputMbps
 		totalPacketsSent += stats.PacketsSent
 		totalPacketsReceived += stats.PacketsReceived
-		
+
 		// Collect reconnection stats
 		totalReconnects += stats.ReconnectCount
 		if stats.ReconnectCount > 0 {
 			targetReconnects[conn.TargetIP] = stats.ReconnectCount
 		}
-		
+
 		// Only include RTT/jitter if we have valid data (not in throughput mode)
 		if !throughputMode && stats.AvgRTTMs > 0 {
 			avgRTT += stats.AvgRTTMs
@@ -285,19 +284,19 @@ func (nt *NetworkTester) sendAPIReport() {
 		connCount++
 	}
 	nt.mu.RUnlock()
-	
+
 	if rttCount > 0 {
 		avgRTT /= float64(rttCount)
 		avgJitter /= float64(rttCount)
 	} else {
 		// In throughput mode, these metrics aren't calculated
-		avgRTT = -1    // Use -1 to indicate "not measured"
+		avgRTT = -1 // Use -1 to indicate "not measured"
 		avgJitter = -1
 	}
-	
+
 	// Convert Mbps to Gbps
 	throughputGbps := totalThroughput / 1000.0
-	
+
 	// Calculate packet loss percentage
 	var lossPercent float64
 	if throughputMode {
@@ -305,7 +304,7 @@ func (nt *NetworkTester) sendAPIReport() {
 		nt.mu.RLock()
 		validLossCount := 0
 		var totalValidLossRate float64
-		
+
 		for _, conn := range nt.connections {
 			stats := conn.GetStats()
 			// Only include valid loss rates (not -1 which means "not applicable")
@@ -315,7 +314,7 @@ func (nt *NetworkTester) sendAPIReport() {
 			}
 		}
 		nt.mu.RUnlock()
-		
+
 		if validLossCount > 0 {
 			lossPercent = totalValidLossRate / float64(validLossCount)
 		} else {
@@ -328,24 +327,24 @@ func (nt *NetworkTester) sendAPIReport() {
 			lossPercent = float64(totalPacketsSent-totalPacketsReceived) / float64(totalPacketsSent) * 100.0
 		}
 	}
-	
+
 	// Create stats payload
 	stats := map[string]interface{}{
-		"ip":                   nt.apiReportIP,
-		"throughput_gbps":      throughputGbps,
-		"packet_loss_percent":  lossPercent,
+		"ip":                  nt.apiReportIP,
+		"throughput_gbps":     throughputGbps,
+		"packet_loss_percent": lossPercent,
 		"jitter_ms":           avgJitter,
 		"rtt_ms":              avgRTT,
-		"reconnect_count":      totalReconnects,
-		"target_reconnects":    targetReconnects,
+		"reconnect_count":     totalReconnects,
+		"target_reconnects":   targetReconnects,
 	}
-	
+
 	jsonData, err := json.Marshal(stats)
 	if err != nil {
 		log.Printf("Failed to marshal stats: %v", err)
 		return
 	}
-	
+
 	// Send to API endpoint
 	resp, err := http.Post(nt.apiEndpoint, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -371,22 +370,22 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 	if nt.endTime.IsZero() {
 		nt.endTime = time.Now()
 	}
-	
+
 	testDuration := nt.endTime.Sub(nt.startTime)
-	
+
 	report := "\n\n" + strings.Repeat("=", 60) + "\n"
 	report += "                    FINAL REPORT\n"
 	report += strings.Repeat("=", 60) + "\n"
 	report += fmt.Sprintf("Test Duration: %v\n", testDuration.Round(time.Second))
 	report += fmt.Sprintf("Protocol: %s | Packet Size: %d bytes\n", nt.protocol, nt.packetSize)
 	report += fmt.Sprintf("Concurrency: %d connections per target\n\n", nt.concurrency)
-	
+
 	// Collect stats from all connections
 	type targetStats struct {
 		ip    string
 		conns []*network.ConnectionStats
 	}
-	
+
 	targetMap := make(map[string]*targetStats)
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
@@ -398,19 +397,19 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 		}
 		targetMap[conn.TargetIP].conns = append(targetMap[conn.TargetIP].conns, &stats)
 	}
-	
+
 	// Generate per-target summary
 	report += "PER-TARGET SUMMARY:\n"
 	report += strings.Repeat("-", 60) + "\n"
-	
+
 	var anomalies []string
-	
+
 	for ip, target := range targetMap {
 		var totalSent, totalReceived, totalLost int64
 		var avgThroughput, avgRTT, avgJitter float64
 		var minRTT float64 = 999999
 		var maxRTT float64 = 0
-		
+
 		for _, stats := range target.conns {
 			totalSent += stats.PacketsSent
 			totalReceived += stats.PacketsReceived
@@ -418,7 +417,7 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 			avgThroughput += stats.ThroughputMbps
 			avgRTT += stats.AvgRTTMs
 			avgJitter += stats.JitterMs
-			
+
 			if stats.MinRTTMs < minRTT {
 				minRTT = stats.MinRTTMs
 			}
@@ -426,7 +425,7 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 				maxRTT = stats.MaxRTTMs
 			}
 		}
-		
+
 		numConns := float64(len(target.conns))
 		// Total throughput is the sum of all connections, not average
 		totalThroughput := avgThroughput
@@ -436,16 +435,16 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 		if totalSent > 0 {
 			lossRate = float64(totalLost) / float64(totalSent) * 100
 		}
-		
+
 		report += fmt.Sprintf("\nTarget: %s (%d connections)\n", ip, len(target.conns))
-		report += fmt.Sprintf("  Total Packets: Sent=%d | Received=%d | Lost=%d\n", 
+		report += fmt.Sprintf("  Total Packets: Sent=%d | Received=%d | Lost=%d\n",
 			totalSent, totalReceived, totalLost)
 		report += fmt.Sprintf("  Loss Rate: %.2f%%\n", lossRate)
 		report += fmt.Sprintf("  Total Throughput: %.2f Mbps (%.2f Gbps)\n", totalThroughput, totalThroughput/1000)
-		report += fmt.Sprintf("  RTT: Min=%.2f ms | Avg=%.2f ms | Max=%.2f ms\n", 
+		report += fmt.Sprintf("  RTT: Min=%.2f ms | Avg=%.2f ms | Max=%.2f ms\n",
 			minRTT, avgRTT, maxRTT)
 		report += fmt.Sprintf("  Avg Jitter: %.2f ms\n", avgJitter)
-		
+
 		// Detect anomalies
 		if lossRate > 5.0 {
 			anomalies = append(anomalies, fmt.Sprintf("HIGH LOSS: %s has %.2f%% packet loss", ip, lossRate))
@@ -460,7 +459,7 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 			anomalies = append(anomalies, fmt.Sprintf("LOW THROUGHPUT: %s has only %.2f Mbps", ip, avgThroughput))
 		}
 	}
-	
+
 	// Report anomalies
 	if len(anomalies) > 0 {
 		report += "\n" + strings.Repeat("!", 60) + "\n"
@@ -474,6 +473,6 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 		report += "           All connections performing normally\n"
 		report += strings.Repeat("✓", 60) + "\n"
 	}
-	
+
 	return report
 }

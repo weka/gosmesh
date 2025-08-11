@@ -6,8 +6,8 @@ package system
 import "syscall"
 
 const (
-	MAP_ANONYMOUS = syscall.MAP_ANONYMOUS
-	MAP_POPULATE  = 0x8000
+	MAP_ANONYMOUS     = syscall.MAP_ANONYMOUS
+	MAP_POPULATE      = 0x8000
 	SYS_SET_MEMPOLICY = 237
 )
 

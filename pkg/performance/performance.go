@@ -11,12 +11,12 @@ import (
 
 const (
 	// Scheduler priorities
-	SCHED_OTHER  = 0
-	SCHED_FIFO   = 1
-	SCHED_RR     = 2
-	SCHED_BATCH  = 3
-	SCHED_IDLE   = 5
-	
+	SCHED_OTHER = 0
+	SCHED_FIFO  = 1
+	SCHED_RR    = 2
+	SCHED_BATCH = 3
+	SCHED_IDLE  = 5
+
 	// CPU affinity syscalls
 	SYS_SCHED_SETAFFINITY = 203
 	SYS_SCHED_GETAFFINITY = 204
@@ -24,14 +24,14 @@ const (
 
 // PerformanceOptimizer manages runtime performance optimizations
 type PerformanceOptimizer struct {
-	gcPercent       int
-	originalGC      int
-	cpuAffinity     []int
-	realtimePrio    bool
-	hugePages       *HugePageAllocator
-	bufferPool      *OptimizedBufferPool
-	isolatedCPUs    []int
-	memoryArena     *MemoryArena
+	gcPercent    int
+	originalGC   int
+	cpuAffinity  []int
+	realtimePrio bool
+	hugePages    *HugePageAllocator
+	bufferPool   *OptimizedBufferPool
+	isolatedCPUs []int
+	memoryArena  *MemoryArena
 }
 
 // NewPerformanceOptimizer creates a performance optimizer
@@ -48,36 +48,36 @@ func NewPerformanceOptimizer() *PerformanceOptimizer {
 func (p *PerformanceOptimizer) OptimizeForThroughput() error {
 	// Disable GC during critical operations
 	p.DisableGC()
-	
+
 	// Set CPU affinity to isolated cores
 	if err := p.SetCPUIsolation(); err != nil {
 		return fmt.Errorf("failed to set CPU isolation: %v", err)
 	}
-	
+
 	// Set real-time scheduling priority
 	if err := p.SetRealtimePriority(); err != nil {
 		// Non-fatal, continue without RT priority
 		fmt.Printf("Warning: Could not set realtime priority: %v\n", err)
 	}
-	
+
 	// Initialize huge pages
 	if hugepages, err := NewHugePageAllocator(HUGEPAGE_2MB, 16); err == nil {
 		p.hugePages = hugepages
 	} else {
 		fmt.Printf("Warning: Huge pages not available: %v\n", err)
 	}
-	
+
 	// Create optimized buffer pool
 	if pool, err := NewOptimizedBufferPool(65536, 1024); err == nil {
 		p.bufferPool = pool
 	}
-	
+
 	// Initialize memory arena for zero-allocation operations
 	p.memoryArena = NewMemoryArena(256 * 1024 * 1024) // 256MB arena
-	
+
 	// Tune runtime parameters
 	p.TuneRuntime()
-	
+
 	return nil
 }
 
@@ -103,20 +103,20 @@ func (p *PerformanceOptimizer) RunWithoutGC(fn func()) {
 func (p *PerformanceOptimizer) SetCPUIsolation() error {
 	// Get number of CPUs
 	numCPU := runtime.NumCPU()
-	
+
 	// Check for isolated CPUs from kernel command line
 	isolatedCPUs := p.getIsolatedCPUs()
 	if len(isolatedCPUs) > 0 {
 		p.isolatedCPUs = isolatedCPUs
 		return p.SetCPUAffinity(isolatedCPUs)
 	}
-	
+
 	// Otherwise use last half of CPUs for network processing
 	networkCPUs := make([]int, 0, numCPU/2)
 	for i := numCPU / 2; i < numCPU; i++ {
 		networkCPUs = append(networkCPUs, i)
 	}
-	
+
 	return p.SetCPUAffinity(networkCPUs)
 }
 
@@ -127,10 +127,10 @@ func (p *PerformanceOptimizer) getIsolatedCPUs() []int {
 		return nil
 	}
 	defer file.Close()
-	
+
 	var cpuList string
 	fmt.Fscanf(file, "%s", &cpuList)
-	
+
 	// Parse CPU list (e.g., "4-7,12-15")
 	return parseCPUList(cpuList)
 }
@@ -140,13 +140,13 @@ func (p *PerformanceOptimizer) SetCPUAffinity(cpus []int) error {
 	if len(cpus) == 0 {
 		return fmt.Errorf("no CPUs specified")
 	}
-	
+
 	// Create CPU set
 	var cpuset [1024 / 64]uint64
 	for _, cpu := range cpus {
 		cpuset[cpu/64] |= 1 << (uint(cpu) % 64)
 	}
-	
+
 	// Set affinity for current process
 	_, _, errno := syscall.Syscall(
 		SYS_SCHED_SETAFFINITY,
@@ -154,16 +154,16 @@ func (p *PerformanceOptimizer) SetCPUAffinity(cpus []int) error {
 		uintptr(len(cpuset)*8),
 		uintptr(unsafe.Pointer(&cpuset[0])),
 	)
-	
+
 	if errno != 0 {
 		return fmt.Errorf("sched_setaffinity failed: %v", errno)
 	}
-	
+
 	p.cpuAffinity = cpus
-	
+
 	// Also set GOMAXPROCS to match
 	runtime.GOMAXPROCS(len(cpus))
-	
+
 	return nil
 }
 
@@ -171,13 +171,13 @@ func (p *PerformanceOptimizer) SetCPUAffinity(cpus []int) error {
 func (p *PerformanceOptimizer) SetRealtimePriority() error {
 	// Lock current thread to OS thread
 	runtime.LockOSThread()
-	
+
 	// Set process priority
 	err := syscall.Setpriority(syscall.PRIO_PROCESS, 0, -20)
 	if err != nil {
 		return fmt.Errorf("setpriority failed: %v", err)
 	}
-	
+
 	p.realtimePrio = true
 	return nil
 }
@@ -186,11 +186,11 @@ func (p *PerformanceOptimizer) SetRealtimePriority() error {
 func (p *PerformanceOptimizer) TuneRuntime() {
 	// Reduce scheduler latency
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	
+
 	// Pre-grow heap to avoid allocations during runtime
 	ballast := make([]byte, 1<<30) // 1GB ballast
 	runtime.KeepAlive(ballast)
-	
+
 	// Force GC and scavenging before critical path
 	runtime.GC()
 	debug.FreeOSMemory()
@@ -199,10 +199,10 @@ func (p *PerformanceOptimizer) TuneRuntime() {
 // PinThreadToCPU pins current goroutine to specific CPU
 func (p *PerformanceOptimizer) PinThreadToCPU(cpu int) {
 	runtime.LockOSThread()
-	
+
 	var cpuset [1024 / 64]uint64
 	cpuset[cpu/64] = 1 << (uint(cpu) % 64)
-	
+
 	syscall.Syscall(
 		SYS_SCHED_SETAFFINITY,
 		uintptr(Gettid()),
@@ -232,15 +232,15 @@ func (m *MemoryArena) Alloc(size int) []byte {
 		// Arena exhausted, reset (or could allocate new arena)
 		m.offset = 0
 	}
-	
+
 	buf := m.data[m.offset : m.offset+size]
 	m.offset += size
-	
+
 	// Align to 8 bytes
 	if m.offset%8 != 0 {
 		m.offset += 8 - (m.offset % 8)
 	}
-	
+
 	return buf
 }
 
@@ -252,15 +252,15 @@ func (m *MemoryArena) Reset() {
 // parseCPUList parses CPU list string (e.g., "0-3,8-11")
 func parseCPUList(cpuList string) []int {
 	cpus := []int{}
-	
+
 	// Simple parser for CPU ranges
 	// Format: "0-3,8-11" or "0,1,2,3"
 	// This is a simplified version
-	
+
 	for i := 0; i < runtime.NumCPU(); i++ {
 		cpus = append(cpus, i)
 	}
-	
+
 	return cpus
 }
 
@@ -280,13 +280,13 @@ func NewWorkerPool(workers int, cpus []int) *WorkerPool {
 		taskQueue: make(chan func(), workers*10),
 		done:      make(chan struct{}),
 	}
-	
+
 	// Start workers
 	for i := 0; i < workers; i++ {
 		cpu := cpus[i%len(cpus)]
 		go pool.worker(i, cpu)
 	}
-	
+
 	return pool
 }
 
@@ -294,17 +294,17 @@ func NewWorkerPool(workers int, cpus []int) *WorkerPool {
 func (p *WorkerPool) worker(id int, cpu int) {
 	// Pin to CPU
 	runtime.LockOSThread()
-	
+
 	var cpuset [1024 / 64]uint64
 	cpuset[cpu/64] = 1 << (uint(cpu) % 64)
-	
+
 	syscall.Syscall(
 		SYS_SCHED_SETAFFINITY,
 		uintptr(Gettid()),
 		uintptr(len(cpuset)*8),
 		uintptr(unsafe.Pointer(&cpuset[0])),
 	)
-	
+
 	// Process tasks
 	for {
 		select {
@@ -354,9 +354,9 @@ func (b *BatchProcessor) Add(data []byte) {
 	// Copy data using arena allocation
 	buf := b.arena.Alloc(len(data))
 	copy(buf, data)
-	
+
 	b.batch = append(b.batch, buf)
-	
+
 	if len(b.batch) >= b.batchSize {
 		b.Flush()
 	}
@@ -375,17 +375,17 @@ func (b *BatchProcessor) Flush() {
 func (p *PerformanceOptimizer) Cleanup() {
 	// Re-enable GC
 	p.EnableGC()
-	
+
 	// Release huge pages
 	if p.hugePages != nil {
 		p.hugePages.Free()
 	}
-	
+
 	// Close buffer pool
 	if p.bufferPool != nil {
 		p.bufferPool.Close()
 	}
-	
+
 	// Reset CPU affinity
 	if len(p.cpuAffinity) > 0 {
 		// Reset to all CPUs

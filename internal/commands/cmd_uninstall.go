@@ -46,7 +46,7 @@ type Uninstaller struct {
 func NewUninstaller(config *UninstallConfig) *Uninstaller {
 	ipList := parseIPs(config.IPs)
 	localIP := detectLocalIP(ipList)
-	
+
 	// Parse SSH hosts
 	var sshHosts []string
 	if config.SSHHosts != "" {
@@ -54,7 +54,7 @@ func NewUninstaller(config *UninstallConfig) *Uninstaller {
 		for i := range sshHosts {
 			sshHosts[i] = strings.TrimSpace(sshHosts[i])
 		}
-		
+
 		if len(sshHosts) != len(ipList) {
 			log.Fatalf("Number of SSH hosts (%d) must match number of IPs (%d)", len(sshHosts), len(ipList))
 		}

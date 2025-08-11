@@ -109,34 +109,34 @@ func runWithConfig(config *RunConfig) {
 
 	// Calculate concurrency if not specified
 	if config.Concurrency == 0 {
-		numTargets := len(ipList) - 1  // Number of other servers to connect to
+		numTargets := len(ipList) - 1 // Number of other servers to connect to
 		if numTargets > 0 {
 			// Calculate connections per target to distribute evenly
 			baseConnections := config.TotalConnections / numTargets
 			remainder := config.TotalConnections % numTargets
-			
+
 			// If we have a remainder, round up to ensure uniform distribution
 			if remainder > 0 {
 				config.Concurrency = baseConnections + 1
 				actualTotal := config.Concurrency * numTargets
-				log.Printf("Auto-adjusting: increasing total connections from %d to %d for uniform distribution (%d per target)", 
+				log.Printf("Auto-adjusting: increasing total connections from %d to %d for uniform distribution (%d per target)",
 					config.TotalConnections, actualTotal, config.Concurrency)
 				config.TotalConnections = actualTotal
 			} else {
 				config.Concurrency = baseConnections
 			}
-			
+
 			// Ensure minimum of 2 connections per target
 			minConnectionsPerTarget := 2
 			if config.Concurrency < minConnectionsPerTarget {
 				config.Concurrency = minConnectionsPerTarget
 				actualTotal := config.Concurrency * numTargets
-				log.Printf("Minimum connections: increasing total connections from %d to %d to maintain minimum %d connections per target", 
+				log.Printf("Minimum connections: increasing total connections from %d to %d to maintain minimum %d connections per target",
 					config.TotalConnections, actualTotal, minConnectionsPerTarget)
 				config.TotalConnections = actualTotal
 			}
-			
-			log.Printf("Configuration: %d total connections, %d targets, %d connections per target", 
+
+			log.Printf("Configuration: %d total connections, %d targets, %d connections per target",
 				config.TotalConnections, numTargets, config.Concurrency)
 		} else {
 			// Single node (loopback testing)

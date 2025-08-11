@@ -23,13 +23,13 @@ func CleanupNode(ctx context.Context, opts CleanupNodeOptions) error {
 	if serviceName == "" {
 		serviceName = "gosmesh-mesh"
 	}
-	
+
 	remoteDir := opts.RemoteDir
 	if remoteDir == "" {
 		remoteDir = "/opt/gosmesh"
 	}
 	remoteBinary := fmt.Sprintf("%s/gosmesh", remoteDir)
-	
+
 	// Stop service if it exists
 	if opts.Verbose {
 		log.Printf("[%s] Stopping existing service...", opts.IP)
@@ -38,7 +38,7 @@ func CleanupNode(ctx context.Context, opts CleanupNodeOptions) error {
 	if err := execSSHWithContext(ctx, opts.SSHHost, stopCmd, "stop service", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] stop service failed: %v", opts.IP, err)
 	}
-	
+
 	// Disable service if it exists
 	if opts.Verbose {
 		log.Printf("[%s] Disabling existing service...", opts.IP)
@@ -47,7 +47,7 @@ func CleanupNode(ctx context.Context, opts CleanupNodeOptions) error {
 	if err := execSSHWithContext(ctx, opts.SSHHost, disableCmd, "disable service", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] disable service failed: %v", opts.IP, err)
 	}
-	
+
 	// Reset failed state (redirect stderr to avoid hanging)
 	if opts.Verbose {
 		log.Printf("[%s] Resetting failed state...", opts.IP)
@@ -56,7 +56,7 @@ func CleanupNode(ctx context.Context, opts CleanupNodeOptions) error {
 	if err := execSSHWithContext(ctx, opts.SSHHost, resetCmd, "reset failed state", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] reset failed state failed: %v", opts.IP, err)
 	}
-	
+
 	// Kill processes running specifically from the remote directory path using their executable location
 	if opts.Verbose {
 		log.Printf("[%s] Killing processes from %s...", opts.IP, remoteDir)
@@ -80,7 +80,7 @@ fi
 	if err := execSSHWithContext(ctx, opts.SSHHost, killCmd, "kill processes", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] kill processes failed: %v", opts.IP, err)
 	}
-	
+
 	// Force kill any remaining processes
 	if opts.Verbose {
 		log.Printf("[%s] Force killing any remaining processes from %s...", opts.IP, remoteDir)
@@ -104,7 +104,7 @@ fi
 	if err := execSSHWithContext(ctx, opts.SSHHost, forceKillCmd, "force kill processes", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] force kill processes failed: %v", opts.IP, err)
 	}
-	
+
 	// Remove service file
 	if opts.Verbose {
 		log.Printf("[%s] Removing service file...", opts.IP)
@@ -113,7 +113,7 @@ fi
 	if err := execSSHWithContext(ctx, opts.SSHHost, removeServiceCmd, "remove service file", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] remove service file failed: %v", opts.IP, err)
 	}
-	
+
 	// Remove binary and directory
 	if opts.Verbose {
 		log.Printf("[%s] Removing binary and directory...", opts.IP)
@@ -122,7 +122,7 @@ fi
 	if err := execSSHWithContext(ctx, opts.SSHHost, removeCmd, "remove directory", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] remove directory failed: %v", opts.IP, err)
 	}
-	
+
 	// Reload systemd
 	if opts.Verbose {
 		log.Printf("[%s] Reloading systemd...", opts.IP)
@@ -131,11 +131,11 @@ fi
 	if err := execSSHWithContext(ctx, opts.SSHHost, reloadCmd, "reload systemd", opts.Verbose); err != nil {
 		return fmt.Errorf("[%s] reload systemd failed: %v", opts.IP, err)
 	}
-	
+
 	if opts.Verbose {
 		log.Printf("[%s] Cleanup completed successfully", opts.IP)
 	}
-	
+
 	return nil
 }
 
@@ -144,22 +144,22 @@ func execSSHWithContext(ctx context.Context, sshHost, command, description strin
 	if verbose {
 		log.Printf("[SSH] Executing %s on %s with context", description, sshHost)
 	}
-	
+
 	// Use CommandContext for proper context handling
-	cmd := exec.CommandContext(ctx, "ssh", 
+	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ConnectTimeout=5",
 		"-o", "BatchMode=yes",
 		"-o", "ServerAliveInterval=5",
 		"-o", "ServerAliveCountMax=1",
 		sshHost, command)
-	
+
 	if verbose {
 		log.Printf("[SSH] Command: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=1 %s '%s'", sshHost, command)
 	}
-	
+
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		if verbose {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -175,7 +175,7 @@ func execSSHWithContext(ctx context.Context, sshHost, command, description strin
 		}
 		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
 	}
-	
+
 	if verbose {
 		if len(output) > 0 {
 			log.Printf("[SSH] Output: %s", strings.TrimSpace(string(output)))

@@ -16,7 +16,7 @@ type OptimizedConnection struct {
 func NewOptimizedConnection(localIP, targetIP string, port int, protocol string, packetSize, pps, id int) *OptimizedConnection {
 	// On non-Linux platforms, just create a regular connection
 	baseConn := NewConnection(localIP, targetIP, port, protocol, packetSize, pps, id)
-	
+
 	return &OptimizedConnection{
 		Connection: baseConn,
 	}

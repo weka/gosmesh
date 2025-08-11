@@ -14,11 +14,11 @@ type Server struct {
 	port       int
 	protocol   string
 	packetSize int
-	bufferSize int  // New: configurable buffer size for throughput mode
-	
+	bufferSize int // New: configurable buffer size for throughput mode
+
 	tcpListener net.Listener
 	udpConn     *net.UDPConn
-	
+
 	wg sync.WaitGroup
 }
 
@@ -28,7 +28,7 @@ func NewServer(localIP string, port int, protocol string, packetSize int) *Serve
 	if packetSize <= 0 || bufferSize < 4194304 {
 		bufferSize = 4194304 // 4MB for high-speed networks
 	}
-	
+
 	return &Server{
 		localIP:    localIP,
 		port:       port,
@@ -61,15 +61,15 @@ func (s *Server) startUDPServer() error {
 	if err != nil {
 		return err
 	}
-	
+
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %v", addr, err)
 	}
 	s.udpConn = conn
-	
+
 	// Configure UDP server socket buffers for high throughput
-	if err := s.udpConn.SetReadBuffer(16777216); err != nil {  // 16MB
+	if err := s.udpConn.SetReadBuffer(16777216); err != nil { // 16MB
 		log.Printf("Warning - could not set UDP server read buffer: %v", err)
 	}
 	if err := s.udpConn.SetWriteBuffer(16777216); err != nil { // 16MB
@@ -90,13 +90,13 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) runTCPServer(ctx context.Context) {
 	defer s.tcpListener.Close()
 	defer log.Printf("TCP server shutdown complete")
-	
+
 	go func() {
 		<-ctx.Done()
 		log.Printf("TCP server context cancelled, closing listener")
 		s.tcpListener.Close()
 	}()
-	
+
 	for {
 		conn, err := s.tcpListener.Accept()
 		if err != nil {
@@ -111,7 +111,7 @@ func (s *Server) runTCPServer(ctx context.Context) {
 				continue
 			}
 		}
-		
+
 		s.wg.Add(1)
 		go func(c net.Conn) {
 			defer s.wg.Done()
@@ -122,23 +122,23 @@ func (s *Server) runTCPServer(ctx context.Context) {
 
 func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	
+
 	remoteAddr := conn.RemoteAddr().String()
 	log.Printf("Server: New connection from %s", remoteAddr)
-	
+
 	// Use larger buffer for throughput mode
 	buffer := make([]byte, s.bufferSize)
-	
+
 	// Configure TCP connection for packet mode echo performance
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetWriteBuffer(4194304) // 4MB (smaller for packet mode)
 		tcpConn.SetReadBuffer(4194304)  // 4MB (smaller for packet mode)
 		tcpConn.SetNoDelay(true)        // Disable Nagle's for low latency echo
 	}
-	
+
 	totalBytes := int64(0)
 	readCount := 0
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -157,17 +157,17 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 			}
 			totalBytes += int64(n)
 			readCount++
-			
+
 			if readCount == 1 {
 				log.Printf("Server: First read from %s, n=%d", remoteAddr, n)
 			}
-			
+
 			// Detect packet mode vs throughput mode by examining packet structure
 			// In packet mode, packets have timestamp headers (16 bytes minimum)
 			if n >= 16 {
 				// Check if this looks like a packet mode packet (has sequence + timestamp)
 				// For now, assume packet mode if packet is small and has header structure
-				if n <= 2048 {  // Packet mode typically uses smaller packets
+				if n <= 2048 { // Packet mode typically uses smaller packets
 					// Echo the packet back for RTT measurement (asynchronously to avoid blocking)
 					go func(data []byte) {
 						_, writeErr := conn.Write(data)
@@ -186,10 +186,10 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 func (s *Server) runUDPServer(ctx context.Context) {
 	defer s.udpConn.Close()
 	defer log.Printf("UDP server shutdown complete")
-	
+
 	// Use max UDP packet size
 	buffer := make([]byte, 65507)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -204,7 +204,7 @@ func (s *Server) runUDPServer(ctx context.Context) {
 				}
 				continue
 			}
-			
+
 			// Echo back the packet
 			if n > 0 {
 				s.udpConn.WriteToUDP(buffer[:n], addr)

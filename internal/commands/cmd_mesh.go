@@ -27,8 +27,8 @@ type MeshConfig struct {
 	Port             int
 	APIPort          int
 	Protocol         string
-	SSHHosts         string  // SSH hosts for deployment (host1,host2,host3)
-	Verbose          bool    // Enable verbose logging
+	SSHHosts         string // SSH hosts for deployment (host1,host2,host3)
+	Verbose          bool   // Enable verbose logging
 	TotalConnections int
 	Concurrency      int
 	ReportInterval   time.Duration
@@ -61,23 +61,23 @@ type ServerStats struct {
 	Jitter     float64   `json:"jitter_ms"`
 	RTT        float64   `json:"rtt_ms"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	
+
 	// Reconnection stats - per-source metrics
-	ReconnectCount       int64               `json:"reconnect_count"`        // Total reconnections from this source
-	TargetReconnects     map[string]int64    `json:"target_reconnects"`      // Reconnections per target IP  
+	ReconnectCount   int64            `json:"reconnect_count"`   // Total reconnections from this source
+	TargetReconnects map[string]int64 `json:"target_reconnects"` // Reconnections per target IP
 }
 
 type DeployTarget struct {
-	IP       string
-	Index    int
-	SSHHost  string
+	IP      string
+	Index   int
+	SSHHost string
 }
 
 type MeshController struct {
 	config     *MeshConfig
 	localIP    string
 	ipList     []string
-	sshHosts   []string  // SSH hosts for each IP
+	sshHosts   []string // SSH hosts for each IP
 	stats      map[string]*ServerStats
 	statsLock  sync.RWMutex
 	httpServer *http.Server
@@ -137,7 +137,7 @@ func MeshCommand(args []string) {
 
 func NewMeshController(config *MeshConfig) *MeshController {
 	ipList := parseIPs(config.IPs)
-	
+
 	// Parse SSH hosts
 	var sshHosts []string
 	if config.SSHHosts != "" {
@@ -145,17 +145,17 @@ func NewMeshController(config *MeshConfig) *MeshController {
 		for i := range sshHosts {
 			sshHosts[i] = strings.TrimSpace(sshHosts[i])
 		}
-		
+
 		if len(sshHosts) != len(ipList) {
 			log.Fatalf("Number of SSH hosts (%d) must match number of IPs (%d)", len(sshHosts), len(ipList))
 		}
 	}
-	
+
 	localIP := detectLocalIP(ipList)
 	if config.Verbose {
 		log.Printf("Detected local IP from mesh list: %s", localIP)
 	}
-	
+
 	// If local IP is not in the mesh list, use any local IP for API server
 	if localIP == "" {
 		localIP = getLocalIPAddress()
@@ -166,7 +166,6 @@ func NewMeshController(config *MeshConfig) *MeshController {
 			log.Fatal("Could not detect any local IP address")
 		}
 	}
-	
 
 	return &MeshController{
 		config:   config,
@@ -208,8 +207,6 @@ func getLocalIPAddress() string {
 	return ""
 }
 
-
-
 func (mc *MeshController) Run() {
 	if !mc.config.Verbose {
 		fmt.Printf("🚀 GoSmesh Mesh Controller\n")
@@ -218,14 +215,14 @@ func (mc *MeshController) Run() {
 		log.Printf("Starting mesh controller on %s", mc.localIP)
 		log.Printf("Deploying to nodes: %v", mc.ipList)
 	}
-	
+
 	// Set up signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	
+
 	// Start API server
 	mc.startAPIServer()
-	
+
 	// Phase 1: Deploy binaries and create services (but don't start)
 	if mc.config.Verbose {
 		log.Println("\n========== PHASE 1: DEPLOYMENT ==========")
@@ -233,24 +230,24 @@ func (mc *MeshController) Run() {
 		fmt.Printf("📦 Deploying to %d nodes... ", len(mc.ipList))
 	}
 	deployDone := make(chan *workers.Results[DeployTarget])
-	
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		
+
 		// Prepare deployment targets
 		targets := mc.prepareDeployTargets()
-		
+
 		// Use parallel deployment with workers package
 		numWorkers := min(len(targets), 32) // Max 32 concurrent deployments
-		results := workers.ProcessConcurrentlyWithIndexes(ctx, targets, numWorkers, 
+		results := workers.ProcessConcurrentlyWithIndexes(ctx, targets, numWorkers,
 			func(ctx context.Context, target DeployTarget, i int) error {
 				return mc.deployToNodeWithStart(target.IP, target.Index, false) // Don't start service yet
 			})
-		
+
 		deployDone <- results
 	}()
-	
+
 	// Wait for deployment or signal
 	var deployResults *workers.Results[DeployTarget]
 	select {
@@ -266,7 +263,7 @@ func (mc *MeshController) Run() {
 		mc.cleanup()
 		return
 	}
-	
+
 	// Check if deployment succeeded
 	if !deployResults.AllSucceeded() {
 		if mc.config.Verbose {
@@ -276,7 +273,7 @@ func (mc *MeshController) Run() {
 			}
 		}
 	}
-	
+
 	// Phase 2: Start all services simultaneously
 	if mc.config.Verbose {
 		log.Println("\n========== PHASE 2: STARTING SERVICES ==========")
@@ -284,11 +281,11 @@ func (mc *MeshController) Run() {
 		fmt.Printf("🚀 Starting services... ")
 	}
 	startDone := make(chan *workers.Results[DeployTarget])
-	
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		
+
 		// Only start services on successfully deployed nodes
 		var successfulTargets []DeployTarget
 		for _, result := range deployResults.Items {
@@ -296,21 +293,21 @@ func (mc *MeshController) Run() {
 				successfulTargets = append(successfulTargets, result.Object)
 			}
 		}
-		
+
 		if mc.config.Verbose {
 			log.Printf("Starting services on %d successfully deployed nodes...", len(successfulTargets))
 		}
-		
+
 		// Start all services concurrently
 		numWorkers := min(len(successfulTargets), 32) // Max 32 concurrent service starts
-		results := workers.ProcessConcurrentlyWithIndexes(ctx, successfulTargets, numWorkers, 
+		results := workers.ProcessConcurrentlyWithIndexes(ctx, successfulTargets, numWorkers,
 			func(ctx context.Context, target DeployTarget, i int) error {
 				return mc.startService(target.IP, target.Index)
 			})
-		
+
 		startDone <- results
 	}()
-	
+
 	// Wait for service starts or signal
 	var startResults *workers.Results[DeployTarget]
 	select {
@@ -326,7 +323,7 @@ func (mc *MeshController) Run() {
 		mc.cleanup()
 		return
 	}
-	
+
 	// Log final status
 	if !startResults.AllSucceeded() {
 		if mc.config.Verbose {
@@ -336,7 +333,7 @@ func (mc *MeshController) Run() {
 			}
 		}
 	}
-	
+
 	// Give services time to fully initialize and establish connections
 	if mc.config.Verbose {
 		log.Println("Waiting for services to fully initialize and establish connections...")
@@ -347,18 +344,18 @@ func (mc *MeshController) Run() {
 	if !mc.config.Verbose {
 		fmt.Printf("Done\n\n📊 Monitoring mesh performance:\n")
 	}
-	
+
 	// Start periodic stats display
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	
+
 	// Create duration timer ONCE outside the loop
 	durationTimer := time.NewTimer(mc.config.Duration)
 	defer durationTimer.Stop()
-	
+
 	// Wait for initial stats
 	time.Sleep(10 * time.Second)
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -382,7 +379,7 @@ func (mc *MeshController) Run() {
 // prepareDeployTargets creates DeployTarget structs for all nodes
 func (mc *MeshController) prepareDeployTargets() []DeployTarget {
 	targets := make([]DeployTarget, len(mc.ipList))
-	
+
 	for i, ip := range mc.ipList {
 		// Determine SSH host - always use SSH (even for local)
 		var sshHost string
@@ -395,14 +392,14 @@ func (mc *MeshController) prepareDeployTargets() []DeployTarget {
 				sshHost = fmt.Sprintf("root@%s", ip)
 			}
 		}
-		
+
 		targets[i] = DeployTarget{
 			IP:      ip,
 			Index:   i,
 			SSHHost: sshHost,
 		}
 	}
-	
+
 	return targets
 }
 
@@ -410,7 +407,7 @@ func (mc *MeshController) prepareDeployTargets() []DeployTarget {
 func (mc *MeshController) handleDeploymentResults(results *workers.Results[DeployTarget]) {
 	successCount := 0
 	failCount := 0
-	
+
 	for _, result := range results.Items {
 		if result.Err != nil {
 			if mc.config.Verbose {
@@ -424,7 +421,7 @@ func (mc *MeshController) handleDeploymentResults(results *workers.Results[Deplo
 			successCount++
 		}
 	}
-	
+
 	if mc.config.Verbose {
 		log.Println("\n========== DEPLOYMENT COMPLETE ==========")
 		log.Printf("Successful deployments: %d/%d", successCount, len(results.Items))
@@ -444,7 +441,7 @@ func (mc *MeshController) handleDeploymentResults(results *workers.Results[Deplo
 func (mc *MeshController) handleServiceStartResults(results *workers.Results[DeployTarget]) {
 	successCount := 0
 	failCount := 0
-	
+
 	for _, result := range results.Items {
 		if result.Err != nil {
 			if mc.config.Verbose {
@@ -458,7 +455,7 @@ func (mc *MeshController) handleServiceStartResults(results *workers.Results[Dep
 			successCount++
 		}
 	}
-	
+
 	if mc.config.Verbose {
 		log.Println("\n========== SERVICE START SUMMARY ==========")
 		log.Printf("✅ Successful starts: %d/%d", successCount, len(results.Items))
@@ -466,7 +463,7 @@ func (mc *MeshController) handleServiceStartResults(results *workers.Results[Dep
 			log.Printf("❌ Failed starts: %d/%d", failCount, len(results.Items))
 		}
 		log.Println("==========================================")
-		
+
 		if successCount > 0 {
 			log.Println("Now monitoring mesh performance...")
 		} else {
@@ -487,7 +484,7 @@ func (mc *MeshController) handleServiceStartResults(results *workers.Results[Dep
 // startService starts the gosmesh service on a specific node and verifies it's running
 func (mc *MeshController) startService(ip string, index int) error {
 	serviceName := "gosmesh-mesh"
-	
+
 	// Determine SSH host
 	var sshHost string
 	if len(mc.sshHosts) > index {
@@ -499,7 +496,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 			sshHost = fmt.Sprintf("root@%s", ip)
 		}
 	}
-	
+
 	if mc.config.Verbose {
 		log.Printf("[%s] 🚀 Starting service...", ip)
 	}
@@ -512,7 +509,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 	if mc.config.Verbose {
 		log.Printf("[%s] ⏳ Service start command completed, verifying...", ip)
 	}
-	
+
 	// Verify service is actually running
 	if mc.config.Verbose {
 		log.Printf("[%s] 🔍 Checking service health...", ip)
@@ -524,7 +521,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 	} else {
 		ssCmd = fmt.Sprintf("ss -tln | grep ':%d ' >/dev/null 2>&1", mc.config.Port)
 	}
-	
+
 	verifyCmd := fmt.Sprintf(`
 		echo "[VERIFY] Quick service check..."
 		# Check if service is active and listening in one go
@@ -543,7 +540,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 		journalctl -u %s --no-pager --since "30 seconds ago" --lines=5 || true
 		exit 1
 	`, serviceName, ssCmd, serviceName, ssCmd, serviceName)
-	
+
 	if err := mc.execSSH(sshHost, verifyCmd, "verify service health"); err != nil {
 		// Simple diagnostic - don't spam logs
 		if mc.config.Verbose {
@@ -551,7 +548,7 @@ func (mc *MeshController) startService(ip string, index int) error {
 		}
 		return fmt.Errorf("[%s] service verification failed: %v", ip, err)
 	}
-	
+
 	if mc.config.Verbose {
 		log.Printf("[%s] ✅ SUCCESS: Service started and verified", ip)
 	}
@@ -571,26 +568,26 @@ func (mc *MeshController) execSSH(sshHost, command, description string) error {
 	if mc.config.Verbose {
 		log.Printf("[SSH] Executing %s on %s", description, sshHost)
 	}
-	
+
 	// Add timeout and batch mode to fail fast if no auth
-	cmd := exec.Command("ssh", 
+	cmd := exec.Command("ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ConnectTimeout=10",
-		"-o", "BatchMode=yes",  // This will fail fast if no passwordless auth
+		"-o", "BatchMode=yes", // This will fail fast if no passwordless auth
 		sshHost, command)
-	
+
 	if mc.config.Verbose {
 		log.Printf("[SSH] Command: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes %s '%s'", sshHost, command)
 	}
-	
+
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		if mc.config.Verbose {
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				exitCode := exitErr.ExitCode()
 				log.Printf("[SSH] Command failed with exit code %d", exitCode)
-				
+
 				// Interpret common SSH exit codes
 				switch exitCode {
 				case 255:
@@ -612,7 +609,7 @@ func (mc *MeshController) execSSH(sshHost, command, description string) error {
 		}
 		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
 	}
-	
+
 	if mc.config.Verbose {
 		if len(output) > 0 {
 			log.Printf("[SSH] Output: %s", strings.TrimSpace(string(output)))
@@ -627,22 +624,22 @@ func (mc *MeshController) execSSHWithContext(ctx context.Context, sshHost, comma
 	if mc.config.Verbose {
 		log.Printf("[SSH] Executing %s on %s with context", description, sshHost)
 	}
-	
+
 	// Use CommandContext for proper context handling
-	cmd := exec.CommandContext(ctx, "ssh", 
+	cmd := exec.CommandContext(ctx, "ssh",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ConnectTimeout=5",
 		"-o", "BatchMode=yes",
 		"-o", "ServerAliveInterval=5",
 		"-o", "ServerAliveCountMax=1",
 		sshHost, command)
-	
+
 	if mc.config.Verbose {
 		log.Printf("[SSH] Command: ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=1 %s '%s'", sshHost, command)
 	}
-	
+
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		if mc.config.Verbose {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -658,7 +655,7 @@ func (mc *MeshController) execSSHWithContext(ctx context.Context, sshHost, comma
 		}
 		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
 	}
-	
+
 	if mc.config.Verbose {
 		if len(output) > 0 {
 			log.Printf("[SSH] Output: %s", strings.TrimSpace(string(output)))
@@ -673,19 +670,19 @@ func (mc *MeshController) execSCP(source, dest, description string) error {
 	if mc.config.Verbose {
 		log.Printf("[SCP] Executing %s: %s -> %s", description, source, dest)
 	}
-	
-	cmd := exec.Command("scp", 
+
+	cmd := exec.Command("scp",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
 		source, dest)
-	
+
 	if mc.config.Verbose {
 		log.Printf("[SCP] Command: scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes %s %s", source, dest)
 	}
-	
+
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		if mc.config.Verbose {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -698,7 +695,7 @@ func (mc *MeshController) execSCP(source, dest, description string) error {
 		}
 		return fmt.Errorf("%s failed: %v (output: %s)", description, err, string(output))
 	}
-	
+
 	if mc.config.Verbose {
 		log.Printf("[SCP] %s completed successfully", description)
 	}
@@ -713,17 +710,17 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if mc.config.Verbose {
 		log.Printf("[%s] Starting deployment", ip)
 	}
-	
+
 	serviceName := "gosmesh-mesh"
 	remoteDir := "/opt/gosmesh"
 	remoteBinary := filepath.Join(remoteDir, "gosmesh")
-	
+
 	// Get the path of the currently executing binary
 	currentBinary, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("[%s] failed to get current binary path: %v", ip, err)
 	}
-	
+
 	// Determine SSH host - always use SSH (even for local)
 	var sshHost string
 	if len(mc.sshHosts) > index {
@@ -735,11 +732,11 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 			sshHost = fmt.Sprintf("root@%s", ip)
 		}
 	}
-	
+
 	if mc.config.Verbose {
 		log.Printf("[%s] Deployment via SSH to %s", ip, sshHost)
 	}
-	
+
 	// Step 0: Test SSH connectivity first
 	if mc.config.Verbose {
 		log.Printf("[%s] Testing SSH connectivity...", ip)
@@ -750,7 +747,7 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if mc.config.Verbose {
 		log.Printf("[%s] SSH connectivity confirmed", ip)
 	}
-	
+
 	// Step 1: Thorough cleanup of old processes and services
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -764,7 +761,7 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if err := CleanupNode(cleanupCtx, opts); err != nil {
 		return err
 	}
-	
+
 	// Step 2: Create remote directory
 	if mc.config.Verbose {
 		log.Printf("[%s] Creating remote directory %s...", ip, remoteDir)
@@ -772,7 +769,7 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if err := mc.execSSH(sshHost, fmt.Sprintf("mkdir -p %s", remoteDir), "create directory"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
-	
+
 	// Step 3: Copy binary (use the currently executing binary)
 	if mc.config.Verbose {
 		log.Printf("[%s] Copying binary to remote...", ip)
@@ -780,7 +777,7 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if err := mc.execSCP(currentBinary, fmt.Sprintf("%s:%s", sshHost, remoteBinary), "copy binary"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
-	
+
 	// Step 4: Make executable
 	if mc.config.Verbose {
 		log.Printf("[%s] Making binary executable...", ip)
@@ -788,7 +785,7 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if err := mc.execSSH(sshHost, fmt.Sprintf("chmod +x %s", remoteBinary), "make executable"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
-	
+
 	// Step 5: Create systemd service file
 	if mc.config.Verbose {
 		log.Printf("[%s] Creating systemd service...", ip)
@@ -799,12 +796,12 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 		return fmt.Errorf("[%s] failed to write service file: %v", ip, err)
 	}
 	defer os.Remove(serviceTempPath)
-	
+
 	// Copy service file to remote
 	if err := mc.execSCP(serviceTempPath, fmt.Sprintf("%s:/etc/systemd/system/%s.service", sshHost, serviceName), "copy service file"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
-	
+
 	// Step 6: Reload systemd
 	if mc.config.Verbose {
 		log.Printf("[%s] Reloading systemd...", ip)
@@ -812,7 +809,7 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	if err := mc.execSSH(sshHost, "systemctl daemon-reload", "reload systemd"); err != nil {
 		return fmt.Errorf("[%s] %v", ip, err)
 	}
-	
+
 	// Step 7: Start service (optional)
 	if startService {
 		if mc.config.Verbose {
@@ -832,17 +829,16 @@ func (mc *MeshController) deployToNodeWithStart(ip string, index int, startServi
 	return nil
 }
 
-
 func (mc *MeshController) generateSystemdUnit(binaryPath string) string {
 	apiEndpoint := fmt.Sprintf("http://%s:%d/stats", mc.localIP, mc.config.APIPort)
 	if mc.config.Verbose {
 		log.Printf("Generated API endpoint for reporting: %s", apiEndpoint)
 	}
-	
+
 	// Build command arguments
-	cmd := fmt.Sprintf("%s run --ips %s --duration %s --port %d --protocol %s --report-to %s", 
+	cmd := fmt.Sprintf("%s run --ips %s --duration %s --port %d --protocol %s --report-to %s",
 		binaryPath, mc.config.IPs, mc.config.Duration, mc.config.Port, mc.config.Protocol, apiEndpoint)
-	
+
 	// Add optional flags if they differ from defaults
 	if mc.config.TotalConnections != 64 {
 		cmd += fmt.Sprintf(" --total-connections %d", mc.config.TotalConnections)
@@ -910,7 +906,7 @@ func (mc *MeshController) generateSystemdUnit(binaryPath string) string {
 	if mc.config.CPUList != "" {
 		cmd += fmt.Sprintf(" --cpu-list %s", mc.config.CPUList)
 	}
-	
+
 	return fmt.Sprintf(`[Unit]
 Description=GoSmesh Mesh Testing Service
 After=network.target
@@ -933,12 +929,12 @@ WantedBy=multi-user.target
 func (mc *MeshController) startAPIServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stats", mc.handleStats)
-	
+
 	mc.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", mc.config.APIPort),
 		Handler: mux,
 	}
-	
+
 	go func() {
 		if mc.config.Verbose {
 			log.Printf("API server listening on :%d", mc.config.APIPort)
@@ -956,47 +952,46 @@ func (mc *MeshController) handleStats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	var stats ServerStats
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	
+
 	if err := json.Unmarshal(body, &stats); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	
+
 	stats.UpdatedAt = time.Now()
-	
+
 	// Initialize TargetReconnects map if nil
 	if stats.TargetReconnects == nil {
 		stats.TargetReconnects = make(map[string]int64)
 	}
-	
+
 	mc.statsLock.Lock()
 	mc.stats[stats.IP] = &stats
 	mc.statsLock.Unlock()
-	
+
 	w.WriteHeader(http.StatusOK)
 }
-
 
 func (mc *MeshController) displayStats() {
 	mc.statsLock.RLock()
 	defer mc.statsLock.RUnlock()
-	
+
 	if len(mc.stats) == 0 {
 		log.Println("No statistics received yet...")
 		return
 	}
-	
+
 	var totalThroughput float64
 	var minThroughput, maxThroughput float64
 	var minServer, maxServer string
-	
+
 	// Aggregate metrics for jitter and packet loss
 	var totalPacketLoss, totalJitter, totalRTT float64
 	var minPacketLoss, maxPacketLoss float64 = 999999, 0
@@ -1005,44 +1000,44 @@ func (mc *MeshController) displayStats() {
 	var minPacketLossServer, maxPacketLossServer string
 	var minJitterServer, maxJitterServer string
 	var minRTTServer, maxRTTServer string
-	
+
 	// Reconnection stats
 	var totalSourceReconnects int64
 	var minSourceReconnects, maxSourceReconnects int64 = 999999, 0
 	var minSourceReconnectsServer, maxSourceReconnectsServer string
 	sourceReconnectStats := make(map[string]int64)
 	targetReconnectStats := make(map[string]int64) // Total reconnections TO each target
-	
+
 	first := true
 	activeCount := 0
-	rttMeasuredCount := 0 // Count servers with actual RTT measurements
+	rttMeasuredCount := 0        // Count servers with actual RTT measurements
 	packetLossMeasuredCount := 0 // Count servers with actual packet loss measurements
-	
+
 	for ip, stats := range mc.stats {
 		// Skip stale stats (older than 30 seconds)
 		if time.Since(stats.UpdatedAt) > 30*time.Second {
 			continue
 		}
-		
+
 		activeCount++
 		totalThroughput += stats.Throughput
-		
+
 		if first || stats.Throughput < minThroughput {
 			minThroughput = stats.Throughput
 			minServer = ip
 			first = false
 		}
-		
+
 		if stats.Throughput > maxThroughput {
 			maxThroughput = stats.Throughput
 			maxServer = ip
 		}
-		
+
 		// Only process packet loss if actually measured (not -1)
 		if stats.PacketLoss >= 0 {
 			totalPacketLoss += stats.PacketLoss
 			packetLossMeasuredCount++
-			
+
 			// Track packet loss min/max
 			if stats.PacketLoss < minPacketLoss {
 				minPacketLoss = stats.PacketLoss
@@ -1053,13 +1048,13 @@ func (mc *MeshController) displayStats() {
 				maxPacketLossServer = ip
 			}
 		}
-		
+
 		// Only process RTT/jitter if actually measured (not -1)
 		if stats.RTT >= 0 && stats.Jitter >= 0 {
 			totalJitter += stats.Jitter
 			totalRTT += stats.RTT
 			rttMeasuredCount++
-			
+
 			// Track jitter min/max
 			if stats.Jitter < minJitter {
 				minJitter = stats.Jitter
@@ -1069,7 +1064,7 @@ func (mc *MeshController) displayStats() {
 				maxJitter = stats.Jitter
 				maxJitterServer = ip
 			}
-			
+
 			// Track RTT min/max
 			if stats.RTT < minRTT {
 				minRTT = stats.RTT
@@ -1080,12 +1075,12 @@ func (mc *MeshController) displayStats() {
 				maxRTTServer = ip
 			}
 		}
-		
+
 		// Collect reconnection stats
 		sourceReconnects := stats.ReconnectCount
 		sourceReconnectStats[ip] = sourceReconnects
 		totalSourceReconnects += sourceReconnects
-		
+
 		// Track source reconnection min/max
 		if sourceReconnects < minSourceReconnects {
 			minSourceReconnects = sourceReconnects
@@ -1095,30 +1090,30 @@ func (mc *MeshController) displayStats() {
 			maxSourceReconnects = sourceReconnects
 			maxSourceReconnectsServer = ip
 		}
-		
+
 		// Aggregate target reconnection stats
 		for targetIP, reconnectCount := range stats.TargetReconnects {
 			targetReconnectStats[targetIP] += reconnectCount
 		}
 	}
-	
+
 	if activeCount == 0 {
 		return
 	}
-	
+
 	// Calculate averages
 	avgThroughput := totalThroughput / float64(activeCount)
-	
+
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Printf("\n=== Mesh Statistics [%s] ===\n", timestamp)
 	fmt.Printf("Active Servers: %d/%d\n", activeCount, len(mc.ipList))
-	
+
 	// Throughput stats with worst performers list
 	fmt.Printf("\nThroughput:\n")
 	fmt.Printf("  Total: %.2f Gbps | Avg: %.2f Gbps\n", totalThroughput, avgThroughput)
-	fmt.Printf("  Best: %s (%.2f Gbps) | Worst: %s (%.2f Gbps)\n", 
+	fmt.Printf("  Best: %s (%.2f Gbps) | Worst: %s (%.2f Gbps)\n",
 		maxServer, maxThroughput, minServer, minThroughput)
-	
+
 	// Create sorted list of throughput for worst performers
 	type throughputPair struct {
 		ip         string
@@ -1132,7 +1127,7 @@ func (mc *MeshController) displayStats() {
 		}
 		sortedThroughput = append(sortedThroughput, throughputPair{ip, stats.Throughput})
 	}
-	
+
 	// Sort by throughput ascending (worst first)
 	for i := 0; i < len(sortedThroughput); i++ {
 		for j := i + 1; j < len(sortedThroughput); j++ {
@@ -1141,13 +1136,13 @@ func (mc *MeshController) displayStats() {
 			}
 		}
 	}
-	
+
 	// Display worst performers (up to 10)
 	worstCount := 10
 	if len(sortedThroughput) < worstCount {
 		worstCount = len(sortedThroughput)
 	}
-	
+
 	if worstCount > 1 {
 		fmt.Printf("  Worst %d: ", worstCount)
 		for i := 0; i < worstCount; i++ {
@@ -1158,12 +1153,12 @@ func (mc *MeshController) displayStats() {
 		}
 		fmt.Printf(" Gbps\n")
 	}
-	
+
 	// Packet loss stats
 	if packetLossMeasuredCount > 0 {
 		avgPacketLoss := totalPacketLoss / float64(packetLossMeasuredCount)
 		fmt.Printf("\nPacket Loss:\n")
-		fmt.Printf("  Avg: %.2f%% | Best: %s (%.2f%%) | Worst: %s (%.2f%%)\n", 
+		fmt.Printf("  Avg: %.2f%% | Best: %s (%.2f%%) | Worst: %s (%.2f%%)\n",
 			avgPacketLoss, minPacketLossServer, minPacketLoss, maxPacketLossServer, maxPacketLoss)
 	} else {
 		if mc.config.Protocol == "tcp" {
@@ -1172,34 +1167,34 @@ func (mc *MeshController) displayStats() {
 			fmt.Printf("\nPacket Loss: Not applicable (throughput mode)\n")
 		}
 	}
-	
+
 	// Only show RTT/Jitter if we have measurements (packet mode)
 	if rttMeasuredCount > 0 {
 		avgJitter := totalJitter / float64(rttMeasuredCount)
 		avgRTT := totalRTT / float64(rttMeasuredCount)
-		
+
 		// Jitter stats
 		fmt.Printf("\nJitter:\n")
-		fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
+		fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n",
 			avgJitter, minJitterServer, minJitter, maxJitterServer, maxJitter)
-		
+
 		// RTT stats
 		fmt.Printf("\nRTT:\n")
-		fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n", 
+		fmt.Printf("  Avg: %.2f ms | Best: %s (%.2f ms) | Worst: %s (%.2f ms)\n",
 			avgRTT, minRTTServer, minRTT, maxRTTServer, maxRTT)
 	} else {
 		// Throughput mode - RTT/jitter not measured
 		fmt.Printf("\nRTT/Jitter: Not measured (throughput mode)\n")
 	}
-	
+
 	// Reconnection stats - always show, even if zero
 	fmt.Printf("\nReconnections (Sources):\n")
 	if totalSourceReconnects > 0 {
 		avgSourceReconnects := float64(totalSourceReconnects) / float64(activeCount)
 		fmt.Printf("  Total: %d | Avg: %.1f per server\n", totalSourceReconnects, avgSourceReconnects)
-		fmt.Printf("  Best: %s (%d) | Worst: %s (%d)\n", 
+		fmt.Printf("  Best: %s (%d) | Worst: %s (%d)\n",
 			minSourceReconnectsServer, minSourceReconnects, maxSourceReconnectsServer, maxSourceReconnects)
-		
+
 		// Top 3 source re-establishers (servers causing most reconnections)
 		type reconnectPair struct {
 			ip    string
@@ -1217,7 +1212,7 @@ func (mc *MeshController) displayStats() {
 				}
 			}
 		}
-		
+
 		fmt.Printf("  Top 3 Re-establishers: ")
 		topCount := 3
 		if len(sortedSources) < topCount {
@@ -1230,7 +1225,7 @@ func (mc *MeshController) displayStats() {
 			fmt.Printf("%s (%d)", sortedSources[i].ip, sortedSources[i].count)
 		}
 		fmt.Printf("\n")
-		
+
 		// Top 3 targets (servers being reconnected to most)
 		var sortedTargets []reconnectPair
 		for targetIP, count := range targetReconnectStats {
@@ -1244,7 +1239,7 @@ func (mc *MeshController) displayStats() {
 				}
 			}
 		}
-		
+
 		if len(sortedTargets) > 0 {
 			fmt.Printf("\nReconnections (Targets):\n")
 			var totalTargetReconnects int64
@@ -1253,7 +1248,7 @@ func (mc *MeshController) displayStats() {
 			}
 			avgTargetReconnects := float64(totalTargetReconnects) / float64(len(sortedTargets))
 			fmt.Printf("  Total: %d | Avg: %.1f per target\n", totalTargetReconnects, avgTargetReconnects)
-			
+
 			fmt.Printf("  Top 3 Problematic Targets: ")
 			topTargetCount := 3
 			if len(sortedTargets) < topTargetCount {
@@ -1272,21 +1267,20 @@ func (mc *MeshController) displayStats() {
 		fmt.Printf("  Total: 0 | Avg: 0.0 per server\n")
 		fmt.Printf("  All connections stable - no reconnections detected\n")
 	}
-	
+
 	fmt.Printf("=======================\n")
 }
-
 
 // cleanup performs cleanup on all nodes concurrently
 func (mc *MeshController) cleanup() {
 	log.Println("Cleaning up mesh deployment...")
-	
+
 	// Prepare cleanup targets
 	targets := mc.prepareDeployTargets()
-	
+
 	// Use workers package for concurrent cleanup with per-server timeout
 	ctx := context.Background()
-	
+
 	numWorkers := min(len(targets), 32) // Max 32 concurrent cleanups
 	results := workers.ProcessConcurrently(ctx, targets, numWorkers,
 		func(ctx context.Context, target DeployTarget) error {
@@ -1302,7 +1296,7 @@ func (mc *MeshController) cleanup() {
 			}
 			return CleanupNode(serverCtx, opts)
 		})
-	
+
 	// Log cleanup results
 	successCount := 0
 	for _, result := range results.Items {
@@ -1313,7 +1307,7 @@ func (mc *MeshController) cleanup() {
 		}
 	}
 	log.Printf("Cleanup completed: %d/%d nodes", successCount, len(targets))
-	
+
 	// Shutdown API server
 	if mc.httpServer != nil {
 		mc.httpServer.Close()

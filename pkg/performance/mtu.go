@@ -51,21 +51,21 @@ func GetMTU(ipStr string) (int, error) {
 // Subtracts IP header (20 bytes) and UDP/TCP header (8/20 bytes)
 func CalculateOptimalPacketSize(mtu int, protocol string) int {
 	ipHeaderSize := 20
-	
+
 	var protocolHeaderSize int
 	if protocol == "udp" {
 		protocolHeaderSize = 8
 	} else {
 		protocolHeaderSize = 20 // TCP
 	}
-	
+
 	// Calculate maximum payload size
 	maxPayload := mtu - ipHeaderSize - protocolHeaderSize
-	
+
 	// Ensure we have at least space for our packet header (16 bytes for sequence + timestamp)
 	if maxPayload < 16 {
 		return 1024 // fallback to safe default
 	}
-	
+
 	return maxPayload
 }

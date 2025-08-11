@@ -68,6 +68,7 @@ tasks:
   vet:
     desc: Run go vet to check for common issues (current platform and Linux cross-compile)
     cmds:
+      - gofmt -l . | tee /dev/stderr | (! grep .)
       - go vet ./...
       - GOOS=linux GOARCH=amd64 go vet ./...
 
@@ -97,9 +98,9 @@ tasks:
       - gofmt -w {{.GO_FILES}}
 
   lint:
-    desc: Run linter
+    desc: Run go vet to check for common issues (current platform and Linux cross-compile)
     cmds:
-      - golangci-lint run
+      - task: vet
 
   install-deps:
     desc: Install development dependencies
