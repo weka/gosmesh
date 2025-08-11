@@ -5,17 +5,28 @@ GoSmesh is a network testing tool designed to measure network performance metric
 
 ## Architecture
 
-### Core Components
-1. **main.go** - Entry point, CLI parsing, local IP detection
-2. **tester.go** - Orchestrates full mesh testing, manages connections, generates reports
-3. **connection.go** - Handles individual connections, packet sending/receiving, metrics collection
-4. **server.go** - Echo server implementation for both TCP and UDP
+### Entry Point & Commands
+- **main.go** - CLI entry point routing to subcommands
+- **internal/commands/cmd_run.go** - Direct network testing on single node
+- **internal/commands/cmd_mesh.go** - Mesh orchestration across multiple nodes
+- **internal/commands/cmd_uninstall.go** - Cleanup deployment
 
-### Key Design Decisions
-- **Full Mesh Topology**: Each node connects to all other nodes (excluding itself)
-- **Echo-based Testing**: Server echoes packets back for RTT measurement
-- **Concurrent Connections**: Multiple connections per target for stress testing
-- **Real-time Metrics**: Continuous calculation of jitter, loss, throughput
+### Core Testing Engine
+- **internal/testing/tester.go** - Main testing orchestrator, manages connections & reports
+- **pkg/network/server.go** - Echo server (TCP/UDP) for receiving test traffic
+- **pkg/network/connection.go** - Individual connection handling, packet I/O, metrics
+- **pkg/network/connection_optimized.go** - High-performance variants with platform optimizations
+
+### Performance & System Integration
+- **pkg/performance/** - MTU detection, huge pages, hardware offload configuration
+- **pkg/system/** - Low-level syscalls, io_uring integration (Linux)
+- **pkg/workers/workers.go** - Concurrent execution framework for deployment
+
+### Key Design Patterns
+- **Command Pattern**: Separate subcommands for different deployment modes
+- **Full Mesh Topology**: Each node connects to all others (N*(N-1) connections)
+- **Echo-based Testing**: Servers reflect packets for RTT/throughput measurement
+- **Worker Pool**: Concurrent deployment and connection management
 
 ## Development Flow
 
