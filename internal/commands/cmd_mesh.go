@@ -61,6 +61,10 @@ type ServerStats struct {
 	Jitter     float64   `json:"jitter_ms"`
 	RTT        float64   `json:"rtt_ms"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	
+	// Reconnection stats - per-source metrics
+	ReconnectCount       int64               `json:"reconnect_count"`        // Total reconnections from this source
+	TargetReconnects     map[string]int64    `json:"target_reconnects"`      // Reconnections per target IP  
 }
 
 type DeployTarget struct {
@@ -967,6 +971,11 @@ func (mc *MeshController) handleStats(w http.ResponseWriter, r *http.Request) {
 	
 	stats.UpdatedAt = time.Now()
 	
+	// Initialize TargetReconnects map if nil
+	if stats.TargetReconnects == nil {
+		stats.TargetReconnects = make(map[string]int64)
+	}
+	
 	mc.statsLock.Lock()
 	mc.stats[stats.IP] = &stats
 	mc.statsLock.Unlock()
@@ -996,6 +1005,13 @@ func (mc *MeshController) displayStats() {
 	var minPacketLossServer, maxPacketLossServer string
 	var minJitterServer, maxJitterServer string
 	var minRTTServer, maxRTTServer string
+	
+	// Reconnection stats
+	var totalSourceReconnects int64
+	var minSourceReconnects, maxSourceReconnects int64 = 999999, 0
+	var minSourceReconnectsServer, maxSourceReconnectsServer string
+	sourceReconnectStats := make(map[string]int64)
+	targetReconnectStats := make(map[string]int64) // Total reconnections TO each target
 	
 	first := true
 	activeCount := 0
@@ -1064,6 +1080,26 @@ func (mc *MeshController) displayStats() {
 				maxRTTServer = ip
 			}
 		}
+		
+		// Collect reconnection stats
+		sourceReconnects := stats.ReconnectCount
+		sourceReconnectStats[ip] = sourceReconnects
+		totalSourceReconnects += sourceReconnects
+		
+		// Track source reconnection min/max
+		if sourceReconnects < minSourceReconnects {
+			minSourceReconnects = sourceReconnects
+			minSourceReconnectsServer = ip
+		}
+		if sourceReconnects > maxSourceReconnects {
+			maxSourceReconnects = sourceReconnects
+			maxSourceReconnectsServer = ip
+		}
+		
+		// Aggregate target reconnection stats
+		for targetIP, reconnectCount := range stats.TargetReconnects {
+			targetReconnectStats[targetIP] += reconnectCount
+		}
 	}
 	
 	if activeCount == 0 {
@@ -1077,11 +1113,51 @@ func (mc *MeshController) displayStats() {
 	fmt.Printf("\n=== Mesh Statistics [%s] ===\n", timestamp)
 	fmt.Printf("Active Servers: %d/%d\n", activeCount, len(mc.ipList))
 	
-	// Throughput stats
+	// Throughput stats with worst performers list
 	fmt.Printf("\nThroughput:\n")
 	fmt.Printf("  Total: %.2f Gbps | Avg: %.2f Gbps\n", totalThroughput, avgThroughput)
 	fmt.Printf("  Best: %s (%.2f Gbps) | Worst: %s (%.2f Gbps)\n", 
 		maxServer, maxThroughput, minServer, minThroughput)
+	
+	// Create sorted list of throughput for worst performers
+	type throughputPair struct {
+		ip         string
+		throughput float64
+	}
+	var sortedThroughput []throughputPair
+	for ip, stats := range mc.stats {
+		// Skip stale stats (older than 30 seconds)
+		if time.Since(stats.UpdatedAt) > 30*time.Second {
+			continue
+		}
+		sortedThroughput = append(sortedThroughput, throughputPair{ip, stats.Throughput})
+	}
+	
+	// Sort by throughput ascending (worst first)
+	for i := 0; i < len(sortedThroughput); i++ {
+		for j := i + 1; j < len(sortedThroughput); j++ {
+			if sortedThroughput[j].throughput < sortedThroughput[i].throughput {
+				sortedThroughput[i], sortedThroughput[j] = sortedThroughput[j], sortedThroughput[i]
+			}
+		}
+	}
+	
+	// Display worst performers (up to 10)
+	worstCount := 10
+	if len(sortedThroughput) < worstCount {
+		worstCount = len(sortedThroughput)
+	}
+	
+	if worstCount > 1 {
+		fmt.Printf("  Worst %d: ", worstCount)
+		for i := 0; i < worstCount; i++ {
+			if i > 0 {
+				fmt.Printf(", ")
+			}
+			fmt.Printf("%s (%.2f)", sortedThroughput[i].ip, sortedThroughput[i].throughput)
+		}
+		fmt.Printf(" Gbps\n")
+	}
 	
 	// Packet loss stats
 	if packetLossMeasuredCount > 0 {
@@ -1114,6 +1190,87 @@ func (mc *MeshController) displayStats() {
 	} else {
 		// Throughput mode - RTT/jitter not measured
 		fmt.Printf("\nRTT/Jitter: Not measured (throughput mode)\n")
+	}
+	
+	// Reconnection stats - always show, even if zero
+	fmt.Printf("\nReconnections (Sources):\n")
+	if totalSourceReconnects > 0 {
+		avgSourceReconnects := float64(totalSourceReconnects) / float64(activeCount)
+		fmt.Printf("  Total: %d | Avg: %.1f per server\n", totalSourceReconnects, avgSourceReconnects)
+		fmt.Printf("  Best: %s (%d) | Worst: %s (%d)\n", 
+			minSourceReconnectsServer, minSourceReconnects, maxSourceReconnectsServer, maxSourceReconnects)
+		
+		// Top 3 source re-establishers (servers causing most reconnections)
+		type reconnectPair struct {
+			ip    string
+			count int64
+		}
+		var sortedSources []reconnectPair
+		for ip, count := range sourceReconnectStats {
+			sortedSources = append(sortedSources, reconnectPair{ip, count})
+		}
+		// Sort by count descending
+		for i := 0; i < len(sortedSources); i++ {
+			for j := i + 1; j < len(sortedSources); j++ {
+				if sortedSources[j].count > sortedSources[i].count {
+					sortedSources[i], sortedSources[j] = sortedSources[j], sortedSources[i]
+				}
+			}
+		}
+		
+		fmt.Printf("  Top 3 Re-establishers: ")
+		topCount := 3
+		if len(sortedSources) < topCount {
+			topCount = len(sortedSources)
+		}
+		for i := 0; i < topCount; i++ {
+			if i > 0 {
+				fmt.Printf(", ")
+			}
+			fmt.Printf("%s (%d)", sortedSources[i].ip, sortedSources[i].count)
+		}
+		fmt.Printf("\n")
+		
+		// Top 3 targets (servers being reconnected to most)
+		var sortedTargets []reconnectPair
+		for targetIP, count := range targetReconnectStats {
+			sortedTargets = append(sortedTargets, reconnectPair{targetIP, count})
+		}
+		// Sort by count descending
+		for i := 0; i < len(sortedTargets); i++ {
+			for j := i + 1; j < len(sortedTargets); j++ {
+				if sortedTargets[j].count > sortedTargets[i].count {
+					sortedTargets[i], sortedTargets[j] = sortedTargets[j], sortedTargets[i]
+				}
+			}
+		}
+		
+		if len(sortedTargets) > 0 {
+			fmt.Printf("\nReconnections (Targets):\n")
+			var totalTargetReconnects int64
+			for _, pair := range sortedTargets {
+				totalTargetReconnects += pair.count
+			}
+			avgTargetReconnects := float64(totalTargetReconnects) / float64(len(sortedTargets))
+			fmt.Printf("  Total: %d | Avg: %.1f per target\n", totalTargetReconnects, avgTargetReconnects)
+			
+			fmt.Printf("  Top 3 Problematic Targets: ")
+			topTargetCount := 3
+			if len(sortedTargets) < topTargetCount {
+				topTargetCount = len(sortedTargets)
+			}
+			for i := 0; i < topTargetCount; i++ {
+				if i > 0 {
+					fmt.Printf(", ")
+				}
+				fmt.Printf("%s (%d)", sortedTargets[i].ip, sortedTargets[i].count)
+			}
+			fmt.Printf("\n")
+		}
+	} else {
+		// Show zero stats when no reconnections
+		fmt.Printf("  Total: 0 | Avg: 0.0 per server\n")
+		fmt.Printf("  All connections stable - no reconnections detected\n")
 	}
 	
 	fmt.Printf("=======================\n")

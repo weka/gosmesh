@@ -83,6 +83,10 @@ type ConnectionStats struct {
 	MaxRTTMs        float64
 	JitterMs        float64
 	LastUpdate      time.Time
+	
+	// Connection re-establishment tracking
+	ReconnectCount   int64   // Total number of reconnections
+	LastReconnectTime time.Time // When the last reconnection occurred
 }
 
 type Connection struct {
@@ -122,6 +126,10 @@ type Connection struct {
 	packetsReceived atomic.Int64
 	bytesSent       atomic.Int64
 	bytesReceived   atomic.Int64
+	
+	// Connection re-establishment tracking
+	reconnectCount    atomic.Int64
+	lastReconnectTime atomic.Int64  // Unix nano timestamp
 }
 
 type Packet struct {
@@ -987,6 +995,13 @@ func (c *Connection) updateStatsThroughput() {
 		}
 	}
 	
+	// Update reconnection stats
+	c.stats.ReconnectCount = c.reconnectCount.Load()
+	lastReconnectNano := c.lastReconnectTime.Load()
+	if lastReconnectNano > 0 {
+		c.stats.LastReconnectTime = time.Unix(0, lastReconnectNano)
+	}
+	
 	c.stats.LastUpdate = time.Now()
 	c.mu.Unlock()
 }
@@ -1063,6 +1078,13 @@ func (c *Connection) updateStatsFull() {
 	}
 	c.rttMu.Unlock()
 	
+	// Update reconnection stats
+	c.stats.ReconnectCount = c.reconnectCount.Load()
+	lastReconnectNano := c.lastReconnectTime.Load()
+	if lastReconnectNano > 0 {
+		c.stats.LastReconnectTime = time.Unix(0, lastReconnectNano)
+	}
+	
 	c.stats.LastUpdate = time.Now()
 }
 
@@ -1111,8 +1133,15 @@ func (c *Connection) reconnectTCP(ctx context.Context) error {
 	for {
 		conn, err = net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
+			// Track successful reconnection
+			c.reconnectCount.Add(1)
+			c.lastReconnectTime.Store(time.Now().UnixNano())
+			
+			reconnectNum := c.reconnectCount.Load()
 			if !firstAttempt {
-				log.Printf("Connection %d: Reconnected to %s after %d retries", c.ID, addr, retryCount)
+				log.Printf("Connection %d: Reconnected to %s after %d retries (reconnection #%d)", c.ID, addr, retryCount, reconnectNum)
+			} else {
+				log.Printf("Connection %d: Reconnected to %s on first attempt (reconnection #%d)", c.ID, addr, reconnectNum)
 			}
 			break
 		}

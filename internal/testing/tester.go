@@ -211,6 +211,14 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 			report += fmt.Sprintf("  Min RTT: %.2f ms | Max RTT: %.2f ms\n", 
 				stats.MinRTTMs, stats.MaxRTTMs)
 		}
+		
+		// Show reconnection stats
+		if stats.ReconnectCount > 0 {
+			timeSinceReconnect := time.Since(stats.LastReconnectTime).Round(time.Second)
+			report += fmt.Sprintf("  Reconnections: %d (last: %v ago)\n", stats.ReconnectCount, timeSinceReconnect)
+		} else {
+			report += fmt.Sprintf("  Reconnections: 0\n")
+		}
 	}
 	
 	return report
@@ -249,6 +257,10 @@ func (nt *NetworkTester) sendAPIReport() {
 	var connCount int
 	var rttCount int // Count connections that actually have RTT data
 	
+	// Reconnection stats
+	var totalReconnects int64
+	targetReconnects := make(map[string]int64)
+	
 	nt.mu.RLock()
 	throughputMode := nt.pps <= 0 // Check if we're in throughput mode
 	
@@ -257,6 +269,12 @@ func (nt *NetworkTester) sendAPIReport() {
 		totalThroughput += stats.ThroughputMbps
 		totalPacketsSent += stats.PacketsSent
 		totalPacketsReceived += stats.PacketsReceived
+		
+		// Collect reconnection stats
+		totalReconnects += stats.ReconnectCount
+		if stats.ReconnectCount > 0 {
+			targetReconnects[conn.TargetIP] = stats.ReconnectCount
+		}
 		
 		// Only include RTT/jitter if we have valid data (not in throughput mode)
 		if !throughputMode && stats.AvgRTTMs > 0 {
@@ -318,6 +336,8 @@ func (nt *NetworkTester) sendAPIReport() {
 		"packet_loss_percent":  lossPercent,
 		"jitter_ms":           avgJitter,
 		"rtt_ms":              avgRTT,
+		"reconnect_count":      totalReconnects,
+		"target_reconnects":    targetReconnects,
 	}
 	
 	jsonData, err := json.Marshal(stats)
