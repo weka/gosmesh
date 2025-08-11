@@ -46,9 +46,6 @@ task deploy-all SERVERS="root@h1 root@h2 root@h3"
 # Run local test (uses binary from .temp/)
 task test-local
 
-# Run mesh test with custom parameters (uses binary from .temp/)
-task run-mesh IPS="10.0.0.1,10.0.0.2" DURATION=60s CONCURRENCY=4
-
 # Clean build artifacts (removes entire .temp/ directory)
 task clean
 ```

@@ -78,20 +78,6 @@ tasks:
     cmds:
       - ./{{.BUILD_DIR}}/{{.BINARY_NAME}} --ips 127.0.0.1,127.0.0.2,127.0.0.3 --duration 10s --concurrency 2
 
-  run-mesh:
-    desc: "Run mesh test with specified IPs (usage: task run-mesh IPS='10.0.0.1,10.0.0.2')"
-    deps: [build]
-    vars:
-      IPS: '{{.IPS}}'
-      DURATION: '{{.DURATION | default "30s"}}'
-      CONCURRENCY: '{{.CONCURRENCY | default "2"}}'
-      PROTOCOL: '{{.PROTOCOL | default "tcp"}}'
-    cmds:
-      - ./{{.BUILD_DIR}}/{{.BINARY_NAME}} --ips {{.IPS}} --duration {{.DURATION}} --concurrency {{.CONCURRENCY}} --protocol {{.PROTOCOL}}
-    preconditions:
-      - sh: '[ -n "{{.IPS}}" ]'
-        msg: "Please specify IPs: task run-mesh IPS='10.0.0.1,10.0.0.2,10.0.0.3'"
-
   fmt:
     desc: Format Go code
     cmds:
