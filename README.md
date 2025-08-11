@@ -1,6 +1,6 @@
-# GosMesh - Network Performance Testing Tool
+# GoSmesh - Network Performance Testing Tool
 
-GosMesh is a distributed network testing tool that measures network performance metrics in a full mesh topology. It supports both UDP and TCP protocols and provides comprehensive reporting with anomaly detection.
+GoSmesh is a distributed network testing tool that measures network performance metrics in a full mesh topology. It supports both UDP and TCP protocols and provides comprehensive reporting with anomaly detection.
 
 ## Features
 
@@ -25,7 +25,7 @@ go build -o gosmesh
 
 ## Usage
 
-GosMesh has three main commands:
+GoSmesh has three main commands:
 
 ### Commands
 
@@ -104,7 +104,7 @@ gosmesh uninstall --ips 10.200.6.28,10.200.6.240,10.200.6.25
 
 ## Measurement Modes
 
-GosMesh operates in two distinct modes that provide different types of measurements:
+GoSmesh operates in two distinct modes that provide different types of measurements:
 
 ### Throughput Mode (Default)
 **Enabled when**: No `--pps` specified or `--pps 0`
@@ -219,7 +219,7 @@ When using `--pps`, the system automatically detects:
 
 ## Performance on 100Gbps Networks
 
-Based on extensive testing, GosMesh achieves:
+Based on extensive testing, GoSmesh achieves:
 - **92.8 Gbps** with 64 connections (99.2% of iperf baseline)
 - **75.6 Gbps** with 32 connections
 - **47.5 Gbps** with 16 connections

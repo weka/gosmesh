@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Development Assistant Guide
 
 ## Project Overview
-GosMesh is a network testing tool designed to measure network performance metrics (jitter, packet loss, throughput) in a full mesh topology. It supports both UDP and TCP protocols and provides real-time and final reports with anomaly detection.
+GoSmesh is a network testing tool designed to measure network performance metrics (jitter, packet loss, throughput) in a full mesh topology. It supports both UDP and TCP protocols and provides real-time and final reports with anomaly detection.
 
 ## Architecture
 

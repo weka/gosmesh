@@ -33,7 +33,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `GosMesh - High-Performance Network Testing Tool
+	fmt.Fprintf(os.Stderr, `GoSmesh - High-Performance Network Testing Tool
 
 Usage:
   gosmesh <command> [options]

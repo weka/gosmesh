@@ -4,10 +4,10 @@
 
 ### Latest Test Results on 100Gbps Network (10.200.6.28 ↔ 10.200.6.240)
 - **iperf TCP baseline**: 93.5 Gbps (8 threads)
-- **GosMesh TCP 8 connections**: 24.0 Gbps (26% of iperf)
-- **GosMesh TCP 16 connections**: 40.2 Gbps (43% of iperf)
-- **GosMesh TCP 16 connections + optimizations**: 47.5 Gbps (51% of iperf)
-- **GosMesh TCP 32 connections + optimizations**: 75.6 Gbps (81% of iperf)
+- **GoSmesh TCP 8 connections**: 24.0 Gbps (26% of iperf)
+- **GoSmesh TCP 16 connections**: 40.2 Gbps (43% of iperf)
+- **GoSmesh TCP 16 connections + optimizations**: 47.5 Gbps (51% of iperf)
+- **GoSmesh TCP 32 connections + optimizations**: 75.6 Gbps (81% of iperf)
 - **Line Rate**: 100 Gbps
 - **Remaining Gap**: 18-24 Gbps for TCP
 
@@ -405,7 +405,7 @@ cat /proc/interrupts | grep eth0
 ## Conclusion
 
 ### Mission Accomplished! 🎉
-**GosMesh achieves 92.8 Gbps (99.2% of iperf) with 64 connections!**
+**GoSmesh achieves 92.8 Gbps (99.2% of iperf) with 64 connections!**
 
 ### Key Success Factors
 1. **Connection parallelism** - 64 parallel TCP connections overcome per-connection limitations

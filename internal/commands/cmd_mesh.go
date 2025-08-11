@@ -212,7 +212,7 @@ func getLocalIPAddress() string {
 
 func (mc *MeshController) Run() {
 	if !mc.config.Verbose {
-		fmt.Printf("🚀 GosMesh Mesh Controller\n")
+		fmt.Printf("🚀 GoSmesh Mesh Controller\n")
 		fmt.Printf("Controller: %s | Nodes: %d | Duration: %v\n\n", mc.localIP, len(mc.ipList), mc.config.Duration)
 	} else {
 		log.Printf("Starting mesh controller on %s", mc.localIP)
@@ -912,7 +912,7 @@ func (mc *MeshController) generateSystemdUnit(binaryPath string) string {
 	}
 	
 	return fmt.Sprintf(`[Unit]
-Description=GosMesh Mesh Testing Service
+Description=GoSmesh Mesh Testing Service
 After=network.target
 
 [Service]
