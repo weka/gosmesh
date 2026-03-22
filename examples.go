@@ -21,6 +21,7 @@ func ExampleBasicTest() {
 		64000,                                  // packet size in bytes
 		9999,                                   // port
 		0,                                      // pps: 0 = throughput mode
+		12345,                                  // apiServer on port
 	)
 
 	// Start the test (non-blocking)
@@ -48,6 +49,7 @@ func ExampleHighPerformance() {
 		9000, // jumbo frame size
 		9999,
 		0,
+		0, // do not start API server
 	)
 
 	// Configure for high performance
@@ -79,7 +81,9 @@ func ExamplePacketMode() {
 		5*time.Second,
 		1024, // smaller packets for packet mode
 		9999,
-		100, // 100 packets per second (packet mode)
+		100,   // 100 packets per second (packet mode)
+		12345, // apiServer on port
+
 	)
 
 	if err := tester.Start(); err != nil {
@@ -104,6 +108,8 @@ func ExampleWithAPIReporting() {
 		64000,
 		9999,
 		0,
+		12345, // apiServer on port
+
 	)
 
 	// Enable API reporting
@@ -131,6 +137,8 @@ func ExampleEarlyStop() {
 		64000,
 		9999,
 		0,
+		12345, // apiServer on port
+
 	)
 
 	if err := tester.Start(); err != nil {
@@ -160,6 +168,7 @@ func ExampleCustomPort() {
 		64000,
 		8888, // custom port instead of default 9999
 		0,
+		12345, // apiServer on port
 	)
 
 	if err := tester.Start(); err != nil {
