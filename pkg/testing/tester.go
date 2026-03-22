@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,6 +14,104 @@ import (
 
 	"github.com/weka/gosmesh/pkg/network"
 )
+
+// TargetMetrics contains performance metrics for a single target.
+// This structure is used in both periodic and final reports via the API.
+type TargetMetrics struct {
+	// IP address of the target
+	IP string `json:"ip"`
+
+	// Packet statistics
+	PacketsSent     int64   `json:"packets_sent"`
+	PacketsReceived int64   `json:"packets_received"`
+	PacketsLost     int64   `json:"packets_lost"`
+	PacketLossRate  float64 `json:"packet_loss_rate"` // Percentage
+
+	// Throughput
+	BytesSent      int64   `json:"bytes_sent"`
+	BytesReceived  int64   `json:"bytes_received"`
+	ThroughputMbps float64 `json:"throughput_mbps"`
+
+	// Latency (not measured in throughput mode)
+	AvgRTTMs float64 `json:"avg_rtt_ms"`
+	MinRTTMs float64 `json:"min_rtt_ms"`
+	MaxRTTMs float64 `json:"max_rtt_ms"`
+	JitterMs float64 `json:"jitter_ms"`
+
+	// Connection statistics
+	ConnectionCount   int        `json:"connection_count"`
+	ReconnectCount    int64      `json:"reconnect_count"`
+	LastReconnectTime *time.Time `json:"last_reconnect_time,omitempty"`
+}
+
+// TestMetadata contains metadata about the test configuration.
+type TestMetadata struct {
+	// Test configuration
+	Protocol    string   `json:"protocol"`
+	PacketSize  int      `json:"packet_size"`
+	Concurrency int      `json:"concurrency"`
+	Port        int      `json:"port"`
+	PPS         int      `json:"pps"` // Packets per second (0 = throughput mode)
+	LocalIP     string   `json:"local_ip"`
+	TargetIPs   []string `json:"target_ips"`
+
+	// Test timing
+	StartTime  time.Time  `json:"start_time"`
+	EndTime    *time.Time `json:"end_time,omitempty"`
+	ElapsedMs  int64      `json:"elapsed_ms"`
+	DurationMs int64      `json:"duration_ms"`
+
+	// Mode information
+	ThroughputMode bool `json:"throughput_mode"` // true if pps <= 0
+	PacketMode     bool `json:"packet_mode"`     // true if pps > 0
+}
+
+// OverallStats contains aggregate statistics across all targets.
+type OverallStats struct {
+	// Aggregate throughput
+	TotalThroughputMbps float64 `json:"total_throughput_mbps"`
+	TotalThroughputGbps float64 `json:"total_throughput_gbps"`
+	AvgThroughputMbps   float64 `json:"avg_throughput_mbps"`
+
+	// Aggregate packet stats
+	TotalPacketsSent     int64   `json:"total_packets_sent"`
+	TotalPacketsReceived int64   `json:"total_packets_received"`
+	TotalPacketsLost     int64   `json:"total_packets_lost"`
+	AveragePacketLoss    float64 `json:"average_packet_loss"` // Percentage
+
+	// Aggregate latency
+	AvgRTTMs    float64 `json:"avg_rtt_ms"`
+	AvgJitterMs float64 `json:"avg_jitter_ms"`
+	MinRTTMs    float64 `json:"min_rtt_ms"`
+	MaxRTTMs    float64 `json:"max_rtt_ms"`
+
+	// Connection stats
+	TotalConnections int   `json:"total_connections"`
+	TotalReconnects  int64 `json:"total_reconnects"`
+
+	// Target summary
+	TargetCount int `json:"target_count"`
+}
+
+// TestResults is the common structure for both periodic and final reports via API.
+// It contains all metrics, metadata, and aggregated statistics.
+type TestResults struct {
+	// Test metadata and configuration
+	Metadata TestMetadata `json:"metadata"`
+
+	// Overall aggregate statistics
+	Overall OverallStats `json:"overall"`
+
+	// Per-target detailed metrics
+	Targets map[string]TargetMetrics `json:"targets"`
+
+	// Anomalies detected (only in final results, empty in periodic)
+	Anomalies []string `json:"anomalies,omitempty"`
+
+	// Status indicator
+	IsComplete bool   `json:"is_complete"` // true for final, false for periodic
+	Message    string `json:"message,omitempty"`
+}
 
 // NetworkTester orchestrates network performance testing across multiple targets.
 // It creates connections to all target IPs and measures performance metrics.
@@ -82,6 +181,10 @@ type NetworkTester struct {
 	apiEndpoint string
 	apiReportIP string
 	apiTicker   *time.Ticker
+
+	// API Server
+	apiServer     *http.Server
+	apiServerPort int
 }
 
 // NewNetworkTester creates a new NetworkTester instance.
@@ -525,4 +628,272 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 	}
 
 	return report
+}
+
+// GetCurrentStats returns a structured TestResults object containing current test statistics.
+// This can be used programmatically or returned via an API endpoint.
+// The results include current metrics for all targets and overall aggregates.
+func (nt *NetworkTester) GetCurrentStats() TestResults {
+	nt.mu.RLock()
+	defer nt.mu.RUnlock()
+
+	elapsed := time.Since(nt.startTime)
+	throughputMode := nt.pps <= 0
+
+	// Build targets map
+	targetsMap := make(map[string]TargetMetrics)
+	connsByTarget := make(map[string][]*network.ConnectionStats)
+
+	for _, conn := range nt.connections {
+		stats := conn.GetStats()
+		connsByTarget[conn.TargetIP] = append(connsByTarget[conn.TargetIP], &stats)
+	}
+
+	var totalThroughput, avgRTT, avgJitter, totalPacketsSent, totalPacketsReceived, totalPacketsLost float64
+	var minRTT float64 = 999999
+	var maxRTT float64 = 0
+	var rttCount int
+	var totalReconnects int64
+
+	for targetIP, conns := range connsByTarget {
+		var targetThroughput, targetAvgRTT, targetAvgJitter, targetBytes float64
+		var targetPacketsSent, targetPacketsReceived, targetPacketsLost int64
+		var targetMinRTT float64 = 999999
+		var targetMaxRTT float64 = 0
+		var targetReconnects int64
+
+		for _, stats := range conns {
+			targetPacketsSent += stats.PacketsSent
+			targetPacketsReceived += stats.PacketsReceived
+			targetPacketsLost += stats.PacketsLost
+			targetThroughput += stats.ThroughputMbps
+			targetBytes += float64(stats.BytesSent)
+			targetAvgRTT += stats.AvgRTTMs
+			targetAvgJitter += stats.JitterMs
+			targetReconnects += stats.ReconnectCount
+
+			if stats.MinRTTMs > 0 && stats.MinRTTMs < targetMinRTT {
+				targetMinRTT = stats.MinRTTMs
+			}
+			if stats.MaxRTTMs > targetMaxRTT {
+				targetMaxRTT = stats.MaxRTTMs
+			}
+		}
+
+		numConns := float64(len(conns))
+		targetAvgRTT /= numConns
+		targetAvgJitter /= numConns
+
+		// Calculate packet loss rate
+		targetLossRate := 0.0
+		if targetPacketsSent > 0 {
+			targetLossRate = float64(targetPacketsSent-targetPacketsReceived) / float64(targetPacketsSent) * 100
+		}
+
+		// Determine last reconnect time if any
+		var lastReconnectTime *time.Time
+		for _, stats := range conns {
+			if stats.ReconnectCount > 0 && (lastReconnectTime == nil || stats.LastReconnectTime.After(*lastReconnectTime)) {
+				lastReconnectTime = &stats.LastReconnectTime
+			}
+		}
+
+		targetsMap[targetIP] = TargetMetrics{
+			IP:                targetIP,
+			PacketsSent:       targetPacketsSent,
+			PacketsReceived:   targetPacketsReceived,
+			PacketsLost:       targetPacketsLost,
+			PacketLossRate:    targetLossRate,
+			BytesSent:         int64(targetBytes),
+			ThroughputMbps:    targetThroughput,
+			AvgRTTMs:          targetAvgRTT,
+			MinRTTMs:          targetMinRTT,
+			MaxRTTMs:          targetMaxRTT,
+			JitterMs:          targetAvgJitter,
+			ConnectionCount:   len(conns),
+			ReconnectCount:    targetReconnects,
+			LastReconnectTime: lastReconnectTime,
+		}
+
+		// Aggregate for overall stats
+		totalThroughput += targetThroughput
+		totalPacketsSent += float64(targetPacketsSent)
+		totalPacketsReceived += float64(targetPacketsReceived)
+		totalPacketsLost += float64(targetPacketsLost)
+		totalReconnects += targetReconnects
+
+		if targetMinRTT < minRTT {
+			minRTT = targetMinRTT
+		}
+		if targetMaxRTT > maxRTT {
+			maxRTT = targetMaxRTT
+		}
+
+		if !throughputMode && targetAvgRTT > 0 {
+			avgRTT += targetAvgRTT
+			avgJitter += targetAvgJitter
+			rttCount++
+		}
+	}
+
+	if rttCount > 0 {
+		avgRTT /= float64(rttCount)
+		avgJitter /= float64(rttCount)
+	} else {
+		avgRTT = -1
+		avgJitter = -1
+		minRTT = -1
+		maxRTT = -1
+	}
+
+	// Calculate average loss rate
+	avgLoss := 0.0
+	if totalPacketsSent > 0 {
+		avgLoss = totalPacketsLost / totalPacketsSent * 100.0
+	}
+
+	overallStats := OverallStats{
+		TotalThroughputMbps:  totalThroughput,
+		TotalThroughputGbps:  totalThroughput / 1000.0,
+		AvgThroughputMbps:    totalThroughput / float64(len(targetsMap)),
+		TotalPacketsSent:     int64(totalPacketsSent),
+		TotalPacketsReceived: int64(totalPacketsReceived),
+		TotalPacketsLost:     int64(totalPacketsLost),
+		AveragePacketLoss:    avgLoss,
+		AvgRTTMs:             avgRTT,
+		AvgJitterMs:          avgJitter,
+		MinRTTMs:             minRTT,
+		MaxRTTMs:             maxRTT,
+		TotalConnections:     len(nt.connections),
+		TotalReconnects:      totalReconnects,
+		TargetCount:          len(targetsMap),
+	}
+
+	return TestResults{
+		Metadata: TestMetadata{
+			Protocol:       nt.protocol,
+			PacketSize:     nt.packetSize,
+			Concurrency:    nt.concurrency,
+			Port:           nt.port,
+			PPS:            nt.pps,
+			LocalIP:        nt.localIP,
+			TargetIPs:      nt.targetIPs,
+			StartTime:      nt.startTime,
+			ElapsedMs:      int64(elapsed.Milliseconds()),
+			DurationMs:     int64(nt.duration.Milliseconds()),
+			ThroughputMode: throughputMode,
+			PacketMode:     !throughputMode,
+		},
+		Overall:    overallStats,
+		Targets:    targetsMap,
+		IsComplete: false,
+		Message:    "Current test statistics",
+	}
+}
+
+// GetFinalStats returns a structured TestResults object with final test results and anomalies.
+// This includes the same structure as GetCurrentStats but marks the results as complete
+// and includes anomaly detection.
+func (nt *NetworkTester) GetFinalStats() TestResults {
+	if nt.endTime.IsZero() {
+		nt.endTime = time.Now()
+	}
+
+	// Get current stats as base
+	results := nt.GetCurrentStats()
+
+	// Mark as final
+	results.IsComplete = true
+	results.Message = "Final test results"
+	endTime := nt.endTime
+	results.Metadata.EndTime = &endTime
+
+	// Detect anomalies
+	var anomalies []string
+	for ip, metrics := range results.Targets {
+		if metrics.PacketLossRate > 5.0 {
+			anomalies = append(anomalies, fmt.Sprintf("HIGH LOSS: %s has %.2f%% packet loss", ip, metrics.PacketLossRate))
+		}
+		if metrics.AvgRTTMs > 100.0 && metrics.AvgRTTMs > 0 {
+			anomalies = append(anomalies, fmt.Sprintf("HIGH LATENCY: %s has %.2f ms average RTT", ip, metrics.AvgRTTMs))
+		}
+		if metrics.JitterMs > 20.0 && metrics.JitterMs > 0 {
+			anomalies = append(anomalies, fmt.Sprintf("HIGH JITTER: %s has %.2f ms jitter", ip, metrics.JitterMs))
+		}
+		if metrics.ThroughputMbps < 10.0 && nt.protocol == "tcp" {
+			anomalies = append(anomalies, fmt.Sprintf("LOW THROUGHPUT: %s has only %.2f Mbps", ip, metrics.ThroughputMbps))
+		}
+	}
+
+	results.Anomalies = anomalies
+	return results
+}
+
+// StartAPIServer starts an HTTP API server that serves test results.
+// The server listens on localhost:port and provides endpoints:
+//   - GET /api/stats - Returns current test statistics as JSON
+//   - GET /api/stats/final - Returns final test statistics with anomalies as JSON
+//
+// Returns the port the server is listening on or an error if startup failed.
+func (nt *NetworkTester) StartAPIServer(port int) error {
+	nt.apiServerPort = port
+
+	// Create router/mux
+	mux := http.NewServeMux()
+
+	// Endpoint for current stats
+	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		results := nt.GetCurrentStats()
+		if err := json.NewEncoder(w).Encode(results); err != nil {
+			log.Printf("Failed to encode current stats: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	// Endpoint for final stats
+	mux.HandleFunc("/api/stats/final", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		results := nt.GetFinalStats()
+		if err := json.NewEncoder(w).Encode(results); err != nil {
+			log.Printf("Failed to encode final stats: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	// Health check endpoint
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"status":"ok","message":"API server is running"}`)
+	})
+
+	// Create server
+	addr := net.JoinHostPort("localhost", fmt.Sprintf("%d", port))
+	nt.apiServer = &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	// Start server in background
+	nt.wg.Add(1)
+	go func() {
+		defer nt.wg.Done()
+		log.Printf("Starting API server on http://%s", addr)
+		if err := nt.apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("API server error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+// StopAPIServer gracefully shuts down the API server.
+func (nt *NetworkTester) StopAPIServer() error {
+	if nt.apiServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return nt.apiServer.Shutdown(ctx)
+	}
+	return nil
 }
