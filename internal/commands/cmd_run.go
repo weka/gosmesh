@@ -45,6 +45,7 @@ type RunConfig struct {
 	NumWorkers       int
 	CPUList          string
 	ReportTo         string // API endpoint to report stats to
+	ApiServerPort    int
 }
 
 func RunCommand(args []string) {
@@ -59,6 +60,7 @@ func RunCommand(args []string) {
 	fs.DurationVar(&config.ReportInterval, "report-interval", 5*time.Second, "Interval for periodic reports")
 	fs.IntVar(&config.PacketSize, "packet-size", 0, "Size of test packets in bytes (0=auto-detect)")
 	fs.IntVar(&config.Port, "port", 9999, "Port to use for testing")
+	fs.IntVar(&config.ApiServerPort, "api-server-port", 0, "If set, will start API server on this port to get stats")
 	fs.IntVar(&config.PPS, "pps", 0, "Packets per second per connection (0=unlimited)")
 	fs.BoolVar(&config.ThroughputMode, "throughput-mode", true, "Enable throughput mode optimizations")
 	fs.IntVar(&config.BufferSize, "buffer-size", 0, "Buffer size for throughput mode (0=auto)")
@@ -181,7 +183,7 @@ func runWithConfig(config *RunConfig) {
 	}
 
 	tester := testing.NewNetworkTester(localIP, ipList, config.Protocol, config.Concurrency,
-		config.Duration, config.ReportInterval, config.PacketSize, config.Port, config.PPS)
+		config.Duration, config.ReportInterval, config.PacketSize, config.Port, config.PPS, config.ApiServerPort)
 
 	// Configure tester with all settings
 	tester.UseOptimized = config.UseOptimized
@@ -227,6 +229,9 @@ func runWithConfig(config *RunConfig) {
 	// Generate final report
 	report := tester.GenerateFinalReport()
 	fmt.Println(report)
+
+	// Stop API server gracefully
+	_ = tester.StopAPIServer()
 }
 
 func parseIPs(ipStr string) []string {

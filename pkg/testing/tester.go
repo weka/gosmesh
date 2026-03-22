@@ -187,6 +187,18 @@ type NetworkTester struct {
 	apiServerPort int
 }
 
+// ServerStats contains minimal statistics for a single server for aggregated reporting
+type ServerStats struct {
+	IP               string           `json:"ip"`
+	Throughput       float64          `json:"throughput_gbps"`
+	PacketLoss       float64          `json:"packet_loss_percent"`
+	Jitter           float64          `json:"jitter_ms"`
+	RTT              float64          `json:"rtt_ms"`
+	ReconnectCount   int64            `json:"reconnect_count"`
+	TargetReconnects map[string]int64 `json:"target_reconnects"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+}
+
 // NewNetworkTester creates a new NetworkTester instance.
 // Parameters:
 //   - localIP: The local IP address to bind to for testing
@@ -198,10 +210,11 @@ type NetworkTester struct {
 //   - packetSize: Size of test packets in bytes
 //   - port: Port to use for testing
 //   - pps: Packets per second per connection (0 = unlimited throughput mode)
+//   - apiServerPort: port number to listen for getStats requests. If 0, no API server will be initialized
 //
 // Returns a new NetworkTester ready to be started.
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int,
-	duration, reportInterval time.Duration, packetSize, port, pps int) *NetworkTester {
+	duration, reportInterval time.Duration, packetSize, port, pps int, apiServerPort int) *NetworkTester {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -217,6 +230,7 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 		pps:            pps,
 		ctx:            ctx,
 		cancel:         cancel,
+		apiServerPort:  apiServerPort,
 	}
 }
 
@@ -226,6 +240,11 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 func (nt *NetworkTester) Start() error {
 	nt.startTime = time.Now()
 
+	if nt.apiServerPort > 0 {
+		if err := nt.StartAPIServer(); err != nil {
+			log.Printf("Failed to start API server: %v\n", err)
+		}
+	}
 	// Start server
 	server := network.NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
 	if err := server.Start(); err != nil {
@@ -242,7 +261,19 @@ func (nt *NetworkTester) Start() error {
 	// This is critical - without enough delay, clients will exhaust retries
 	// In mesh mode, ALL nodes must have their servers ready before ANY connections start
 	log.Printf("Waiting 10 seconds for all servers to start across the mesh...")
-	time.Sleep(10 * time.Second)
+
+	// Use a timer with context monitoring so this can be interrupted by signals
+	startupTimer := time.NewTimer(10 * time.Second)
+	defer startupTimer.Stop()
+
+	select {
+	case <-startupTimer.C:
+		// Startup wait completed normally
+	case <-nt.ctx.Done():
+		// Context cancelled (e.g., signal received)
+		log.Printf("Interrupted during server startup wait")
+		return fmt.Errorf("interrupted during server startup wait")
+	}
 
 	// Create connections to all targets (excluding self)
 	for _, targetIP := range nt.targetIPs {
@@ -478,14 +509,15 @@ func (nt *NetworkTester) sendAPIReport() {
 	}
 
 	// Create stats payload
-	stats := map[string]interface{}{
-		"ip":                  nt.apiReportIP,
-		"throughput_gbps":     throughputGbps,
-		"packet_loss_percent": lossPercent,
-		"jitter_ms":           avgJitter,
-		"rtt_ms":              avgRTT,
-		"reconnect_count":     totalReconnects,
-		"target_reconnects":   targetReconnects,
+	stats := &ServerStats{
+		IP:               nt.apiReportIP,
+		Throughput:       throughputGbps,
+		PacketLoss:       lossPercent,
+		Jitter:           avgJitter,
+		RTT:              avgRTT,
+		ReconnectCount:   totalReconnects,
+		TargetReconnects: targetReconnects,
+		UpdatedAt:        time.Now(),
 	}
 
 	jsonData, err := json.Marshal(stats)
@@ -835,20 +867,23 @@ func (nt *NetworkTester) GetFinalStats() TestResults {
 //   - GET /api/stats/final - Returns final test statistics with anomalies as JSON
 //
 // Returns the port the server is listening on or an error if startup failed.
-func (nt *NetworkTester) StartAPIServer(port int) error {
-	nt.apiServerPort = port
+func (nt *NetworkTester) StartAPIServer() error {
 
 	// Create router/mux
 	mux := http.NewServeMux()
 
 	// Endpoint for current stats
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		results := nt.GetCurrentStats()
-		if err := json.NewEncoder(w).Encode(results); err != nil {
+		jsonData, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
 			log.Printf("Failed to encode current stats: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(jsonData)
 	})
 
 	// Endpoint for final stats
@@ -869,7 +904,9 @@ func (nt *NetworkTester) StartAPIServer(port int) error {
 	})
 
 	// Create server
-	addr := net.JoinHostPort("localhost", fmt.Sprintf("%d", port))
+	// Bind to all interfaces (0.0.0.0) instead of just localhost
+	// This allows connections from any network interface
+	addr := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", nt.apiServerPort))
 	nt.apiServer = &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -893,7 +930,11 @@ func (nt *NetworkTester) StopAPIServer() error {
 	if nt.apiServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return nt.apiServer.Shutdown(ctx)
+		err := nt.apiServer.Shutdown(ctx)
+		if err == nil {
+			nt.apiServer = nil
+		}
+		return err
 	}
 	return nil
 }
