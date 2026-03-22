@@ -70,48 +70,81 @@ func getOptimalBufferPool(size int, useOptimized bool) (bufPtr *[]byte, poolPut 
 	return
 }
 
+// ConnectionStats holds the performance metrics for a single connection.
+// Statistics are automatically updated during testing and can be retrieved
+// via Connection.GetStats().
 type ConnectionStats struct {
-	PacketsSent     int64
+	// PacketsSent is the number of packets transmitted
+	PacketsSent int64
+	// PacketsReceived is the number of echo responses received (packet mode)
 	PacketsReceived int64
-	PacketsLost     int64
-	BytesSent       int64
-	BytesReceived   int64
-	LossRate        float64
-	ThroughputMbps  float64
-	AvgRTTMs        float64
-	MinRTTMs        float64
-	MaxRTTMs        float64
-	JitterMs        float64
-	LastUpdate      time.Time
+	// PacketsLost is the number of packets that didn't receive responses
+	PacketsLost int64
+	// BytesSent is the total bytes transmitted
+	BytesSent int64
+	// BytesReceived is the total bytes received
+	BytesReceived int64
+	// LossRate is the packet loss percentage (0-100)
+	LossRate float64
+	// ThroughputMbps is the measured throughput in megabits per second
+	ThroughputMbps float64
+	// AvgRTTMs is the average round-trip time in milliseconds (packet mode only)
+	AvgRTTMs float64
+	// MinRTTMs is the minimum RTT observed in milliseconds
+	MinRTTMs float64
+	// MaxRTTMs is the maximum RTT observed in milliseconds
+	MaxRTTMs float64
+	// JitterMs is the standard deviation of RTT in milliseconds
+	JitterMs float64
+	// LastUpdate is when these stats were last calculated
+	LastUpdate time.Time
 
-	// Connection re-establishment tracking
-	ReconnectCount    int64     // Total number of reconnections
-	LastReconnectTime time.Time // When the last reconnection occurred
+	// ReconnectCount is the total number of times the connection was re-established
+	ReconnectCount int64
+	// LastReconnectTime is when the last reconnection occurred
+	LastReconnectTime time.Time
 }
 
+// Connection represents a single network connection to a target.
+// It handles sending test packets and measuring performance metrics.
+// Connections are typically created by NetworkTester, but can be used directly
+// for more fine-grained control.
 type Connection struct {
-	ID             int
+	// ID is a unique identifier for this connection within a tester
+	ID int
+	// TargetIP is the destination IP address
+	TargetIP string
+
+	// ...internal fields...
 	localIP        string
-	TargetIP       string
 	port           int
 	protocol       string
 	packetSize     int
 	pps            int
 	throughputMode bool // New: throughput mode for max performance
-	BufferSize     int  // New: configurable buffer size
-	NumWorkers     int  // New: number of parallel workers
+	// BufferSize sets the socket buffer size (0 = auto)
+	BufferSize int
+	// NumWorkers is the number of parallel worker threads
+	NumWorkers int
 
 	// Optimization parameters
+	// SendBatchSize is the number of packets to batch together
 	SendBatchSize int
+	// RecvBatchSize is the number of receive operations to batch
 	RecvBatchSize int
-	TCPCork       bool
-	TCPQuickAck   bool
-	TCPNoDelay    bool
+	// TCPCork enables TCP cork on send
+	TCPCork bool
+	// TCPQuickAck enables TCP quick acknowledgment
+	TCPQuickAck bool
+	// TCPNoDelay disables Nagle's algorithm
+	TCPNoDelay bool
+	// BusyPollUsecs enables busy polling (0 = disabled)
 	BusyPollUsecs int
-	UseOptimized  bool // Enable Linux-specific optimizations
+	// UseOptimized enables platform-specific optimizations
+	UseOptimized bool
 
 	conn    net.Conn
-	tcpConn *net.TCPConn // New: keep TCP conn for socket options
+	tcpConn *net.TCPConn
 	udpConn *net.UDPConn
 
 	stats ConnectionStats
@@ -1088,6 +1121,9 @@ func (c *Connection) updateStatsFull() {
 	c.stats.LastUpdate = time.Now()
 }
 
+// GetStats returns a snapshot of the current performance metrics for this connection.
+// The statistics include throughput, packet loss, latency, and jitter depending
+// on the protocol and mode. This method is safe to call concurrently.
 func (c *Connection) GetStats() ConnectionStats {
 	c.updateStats()
 	c.mu.RLock()
