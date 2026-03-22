@@ -214,8 +214,8 @@ func runWithConfig(config *RunConfig) {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		<-sigChan
-		log.Println("Received interrupt signal")
+		sig := <-sigChan
+		log.Printf("\n⚠️  Received signal: %v - initiating graceful shutdown...", sig)
 		tester.Stop()
 	}()
 
@@ -224,7 +224,24 @@ func runWithConfig(config *RunConfig) {
 		log.Fatalf("Failed to start test: %v", err)
 	}
 
-	tester.Wait()
+	// Wait for test with signal monitoring
+	// Create a done channel to know when Wait() completes
+	done := make(chan struct{})
+	go func() {
+		tester.Wait()
+		close(done)
+	}()
+
+	// Wait for either normal completion or a second signal for force exit
+	select {
+	case <-done:
+		// Normal completion
+	case sig := <-sigChan:
+		// Force exit on second signal
+		log.Printf("\n⚠️  Received second signal: %v - forcing exit...", sig)
+		_ = tester.StopAPIServer()
+		os.Exit(1)
+	}
 
 	// Generate final report
 	report := tester.GenerateFinalReport()
