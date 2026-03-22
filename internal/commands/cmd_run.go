@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/weka/gosmesh/internal/testing"
 	"github.com/weka/gosmesh/pkg/performance"
+	"github.com/weka/gosmesh/pkg/testing"
 )
 
 type RunConfig struct {

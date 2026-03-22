@@ -14,6 +14,29 @@ import (
 	"github.com/weka/gosmesh/pkg/network"
 )
 
+// NetworkTester orchestrates network performance testing across multiple targets.
+// It creates connections to all target IPs and measures performance metrics.
+//
+// Usage:
+//
+//	tester := testing.NewNetworkTester(
+//	    "192.168.1.1",                          // local IP
+//	    []string{"192.168.1.2", "192.168.1.3"}, // target IPs
+//	    "tcp",                                   // protocol
+//	    2,                                       // concurrency per target
+//	    5*time.Minute,                          // duration
+//	    5*time.Second,                          // report interval
+//	    64000,                                   // packet size
+//	    9999,                                    // port
+//	    0,                                       // pps (0 = throughput mode)
+//	)
+//	if err := tester.Start(); err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer tester.Stop()
+//	tester.Wait()
+//	report := tester.GenerateFinalReport()
+//	fmt.Println(report)
 type NetworkTester struct {
 	localIP        string
 	targetIPs      []string
@@ -61,6 +84,19 @@ type NetworkTester struct {
 	apiTicker   *time.Ticker
 }
 
+// NewNetworkTester creates a new NetworkTester instance.
+// Parameters:
+//   - localIP: The local IP address to bind to for testing
+//   - ips: List of target IP addresses to test against
+//   - protocol: "tcp" or "udp"
+//   - concurrency: Number of connections per target IP
+//   - duration: How long the test should run
+//   - reportInterval: How often to print periodic reports
+//   - packetSize: Size of test packets in bytes
+//   - port: Port to use for testing
+//   - pps: Packets per second per connection (0 = unlimited throughput mode)
+//
+// Returns a new NetworkTester ready to be started.
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int,
 	duration, reportInterval time.Duration, packetSize, port, pps int) *NetworkTester {
 
@@ -81,6 +117,9 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 	}
 }
 
+// Start begins the network testing.
+// It starts the echo server, creates connections to all targets, and starts periodic reporting.
+// This is non-blocking; call Wait() to wait for completion or Stop() to end the test early.
 func (nt *NetworkTester) Start() error {
 	nt.startTime = time.Now()
 
@@ -162,6 +201,7 @@ func (nt *NetworkTester) Start() error {
 	return nil
 }
 
+// periodicReporter prints periodic reports at the configured interval.
 func (nt *NetworkTester) periodicReporter() {
 	defer nt.wg.Done()
 	ticker := time.NewTicker(nt.reportInterval)
@@ -178,6 +218,7 @@ func (nt *NetworkTester) periodicReporter() {
 	}
 }
 
+// generatePeriodicReport creates a human-readable report of current statistics.
 func (nt *NetworkTester) generatePeriodicReport() string {
 	nt.mu.RLock()
 	defer nt.mu.RUnlock()
@@ -223,11 +264,15 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 	return report
 }
 
+// EnableAPIReporting configures the tester to send stats to an API endpoint.
+// endpoint: HTTP endpoint to POST stats to
+// reportIP: IP address to include in the report
 func (nt *NetworkTester) EnableAPIReporting(endpoint, reportIP string) {
 	nt.apiEndpoint = endpoint
 	nt.apiReportIP = reportIP
 }
 
+// startAPIReporter starts the goroutine that sends periodic API reports.
 func (nt *NetworkTester) startAPIReporter() {
 	nt.apiTicker = time.NewTicker(1 * time.Second)
 	nt.wg.Add(1)
@@ -248,6 +293,7 @@ func (nt *NetworkTester) startAPIReporter() {
 	}()
 }
 
+// sendAPIReport sends current statistics to the configured API endpoint.
 func (nt *NetworkTester) sendAPIReport() {
 	// Calculate aggregate stats
 	var totalThroughput float64
@@ -354,6 +400,7 @@ func (nt *NetworkTester) sendAPIReport() {
 	defer resp.Body.Close()
 }
 
+// Stop terminates the test immediately.
 func (nt *NetworkTester) Stop() {
 	nt.cancel()
 	nt.endTime = time.Now()
@@ -362,10 +409,13 @@ func (nt *NetworkTester) Stop() {
 	}
 }
 
+// Wait blocks until all test goroutines have completed.
 func (nt *NetworkTester) Wait() {
 	nt.wg.Wait()
 }
 
+// GenerateFinalReport produces a comprehensive report of the test results.
+// Returns a formatted string with per-target statistics and anomaly detection.
 func (nt *NetworkTester) GenerateFinalReport() string {
 	if nt.endTime.IsZero() {
 		nt.endTime = time.Now()
