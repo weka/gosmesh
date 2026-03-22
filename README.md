@@ -104,6 +104,90 @@ gosmesh run --ips 172.16.0.10,172.16.0.11 --protocol udp --pps 1000
 gosmesh uninstall --ips 10.200.6.28,10.200.6.240,10.200.6.25
 ```
 
+## Using GoSmesh as a Library
+
+GoSmesh can be imported and used as a Go library for programmatic network testing.
+
+### Installation
+
+```bash
+go get github.com/weka/gosmesh
+```
+
+### Basic Usage
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/weka/gosmesh/pkg/testing"
+)
+
+func main() {
+	// Create a new tester
+	tester := testing.NewNetworkTester(
+		"192.168.1.1",                          // local IP
+		[]string{"192.168.1.2", "192.168.1.3"}, // target IPs
+		"tcp",                                   // protocol
+		2,                                       // concurrency per target
+		5*time.Minute,                          // duration
+		5*time.Second,                          // report interval
+		64000,                                   // packet size
+		9999,                                    // port
+		0,                                       // pps (0 = throughput mode)
+	)
+
+	// Optional: configure optimization
+	tester.UseOptimized = true
+	tester.TCPNoDelay = true
+	tester.BufferSize = 4194304 // 4MB
+
+	// Start the test (non-blocking)
+	if err := tester.Start(); err != nil {
+		log.Fatal(err)
+	}
+
+	// Wait for completion or stop early
+	tester.Wait()
+
+	// Get and print the final report
+	report := tester.GenerateFinalReport()
+	fmt.Println(report)
+}
+```
+
+### Advanced Configuration
+
+```go
+// Enable API reporting
+tester.EnableAPIReporting("http://api.example.com/stats", "192.168.1.1")
+
+// Configure for high performance
+tester.UseOptimized = true
+tester.BufferSize = 4194304           // 4MB buffers
+tester.NumWorkers = 4                 // Worker threads
+tester.SendBatchSize = 64             // Batch packets
+tester.RecvBatchSize = 64
+tester.TCPNoDelay = true              // Disable Nagle
+tester.TCPCork = false                // Don't cork packets
+```
+
+### Accessing Real-time Metrics
+
+```go
+// Start the test
+tester.Start()
+
+// Periodically check metrics in your own code
+// Access low-level metrics through the testing package API
+```
+
+For complete API documentation, see the `pkg/testing` and `pkg/network` packages.
+
 ## Measurement Modes
 
 GoSmesh operates in two distinct modes that provide different types of measurements:
