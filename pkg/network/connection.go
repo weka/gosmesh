@@ -505,6 +505,11 @@ func (c *Connection) tcpSenderThroughput(ctx context.Context) {
 			log.Printf("Connection %d: Sender stopping, total writes: %d, total bytes: %d", c.ID, writeCount, c.bytesSent.Load())
 			return
 		default:
+			// Check if connection is still valid
+			if c.conn == nil {
+				return // Connection was closed
+			}
+
 			// Send large buffer at once
 			n, err := c.conn.Write(buffer)
 			if err != nil {
@@ -568,6 +573,11 @@ func (c *Connection) tcpSenderPacket(ctx context.Context) {
 			return
 		case <-ticker.C:
 			sequenceNum++
+
+			// Check if connection is still valid
+			if c.conn == nil {
+				return // Connection was closed
+			}
 
 			// Prepare packet with timestamp for RTT measurement
 			binary.BigEndian.PutUint64(packet[0:8], sequenceNum)
@@ -771,6 +781,11 @@ func (c *Connection) udpSenderThroughput(ctx context.Context) {
 			}
 			return
 		default:
+			// Check if connection is still valid
+			if c.udpConn == nil {
+				return // Connection was closed
+			}
+
 			sequenceNum++
 
 			// Add minimal header for tracking (first 8 bytes only)
@@ -824,6 +839,11 @@ func (c *Connection) udpSenderPacket(ctx context.Context) {
 			return
 		case <-ticker.C:
 			sequenceNum++
+
+			// Check if connection is still valid
+			if c.udpConn == nil {
+				return // Connection was closed
+			}
 
 			// Prepare packet with timestamp
 			binary.BigEndian.PutUint64(packet[0:8], sequenceNum)

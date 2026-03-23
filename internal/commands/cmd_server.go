@@ -3,8 +3,11 @@ package commands
 import (
 	"flag"
 	"log"
+	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 
 	"github.com/weka/gosmesh/pkg/testing"
 )
@@ -40,10 +43,25 @@ func ServerCommand(args []string) {
 	)
 
 	// Start the control server
-	if err := tester.StartHTTPServer(port); err != nil {
+	if err := tester.StartHTTPServer(); err != nil {
 		log.Fatalf("Failed to start control server: %v", err)
 	}
 
-	// Keep the process alive
-	select {}
+	// Set up signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Wait for signal
+	sig := <-sigChan
+	log.Printf("\n⚠️  Received signal: %v - shutting down...", sig)
+
+	// Stop any running test
+	if tester != nil {
+		log.Printf("Stopping NetworkTester...")
+		tester.Stop()
+		log.Printf("Stopping API server")
+		tester.StopHTTPServer()
+	}
+
+	log.Printf("Goodbye!")
 }

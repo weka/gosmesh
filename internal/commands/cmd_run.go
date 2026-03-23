@@ -3,6 +3,7 @@ package commands
 import (
 	"flag"
 	"fmt"
+	"github.com/weka/gosmesh/pkg/testing"
 	"log"
 	"net"
 	"os"
@@ -12,43 +13,40 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/weka/gosmesh/pkg/performance"
-	"github.com/weka/gosmesh/pkg/testing"
 )
 
 func RunCommand(args []string) {
-	config := &testing.RunConfig{}
+	config := testing.GetDefaultTestConfig()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
-	fs.StringVar(&config.IPs, "ips", "", "Comma-separated list of IPs for full mesh testing")
-	fs.StringVar(&config.Protocol, "protocol", "tcp", "Protocol to use: udp or tcp")
-	fs.IntVar(&config.TotalConnections, "total-connections", 64, "Total connections each server establishes (distributed across all peers)")
-	fs.IntVar(&config.Concurrency, "concurrency", 0, "Number of concurrent connections per target (0=auto-calculate)")
-	fs.DurationVar(&config.Duration, "duration", 5*time.Minute, "Test duration (default: 5m)")
-	fs.DurationVar(&config.ReportInterval, "report-interval", 5*time.Second, "Interval for periodic reports")
-	fs.IntVar(&config.PacketSize, "packet-size", 0, "Size of test packets in bytes (0=auto-detect)")
-	fs.IntVar(&config.Port, "port", 9999, "Port to use for testing")
-	fs.IntVar(&config.ApiServerPort, "api-server-port", 0, "If set, will start API server on this port to get stats")
-	fs.IntVar(&config.PPS, "pps", 0, "Packets per second per connection (0=unlimited)")
-	fs.BoolVar(&config.ThroughputMode, "throughput-mode", true, "Enable throughput mode optimizations")
-	fs.IntVar(&config.BufferSize, "buffer-size", 0, "Buffer size for throughput mode (0=auto)")
-	fs.BoolVar(&config.TCPNoDelay, "tcp-nodelay", false, "Enable TCP_NODELAY")
-	fs.BoolVar(&config.UseOptimized, "optimized", true, "Use optimized connections")
-	fs.BoolVar(&config.EnableIOUring, "io-uring", true, "Enable io_uring on Linux")
-	fs.BoolVar(&config.EnableHugePages, "huge-pages", true, "Enable huge pages")
-	fs.BoolVar(&config.EnableOffload, "hw-offload", true, "Enable hardware offloading")
-	fs.IntVar(&config.SendBatchSize, "send-batch-size", 64, "Send batch size")
-	fs.IntVar(&config.RecvBatchSize, "recv-batch-size", 64, "Receive batch size")
-	fs.IntVar(&config.NumQueues, "num-queues", 0, "Number of queues (0=auto)")
-	fs.IntVar(&config.BusyPollUsecs, "busy-poll-usecs", 50, "Busy polling microseconds")
-	fs.BoolVar(&config.TCPCork, "tcp-cork", false, "Enable TCP_CORK")
-	fs.BoolVar(&config.TCPQuickAck, "tcp-quickack", false, "Enable TCP_QUICKACK")
-	fs.IntVar(&config.MemArenaSize, "memory-arena-size", 268435456, "Memory arena size (default: 256MB)")
-	fs.IntVar(&config.RingSize, "ring-size", 4096, "Ring buffer size")
-	fs.IntVar(&config.NumWorkers, "num-workers", 0, "Number of workers (0=auto)")
-	fs.StringVar(&config.CPUList, "cpu-list", "", "CPU affinity list")
-	fs.StringVar(&config.ReportTo, "report-to", "", "API endpoint to report statistics to")
+	fs.StringVar(&config.IPs, "ips", config.IPs, "Comma-separated list of IPs for full mesh testing")
+	fs.StringVar(&config.Protocol, "protocol", config.Protocol, "Protocol to use: udp or tcp")
+	fs.IntVar(&config.TotalConnections, "total-connections", config.TotalConnections, "Total connections each server establishes (distributed across all peers)")
+	fs.IntVar(&config.Concurrency, "concurrency", config.Concurrency, "Number of concurrent connections per target (0=auto-calculate)")
+	fs.DurationVar(&config.Duration, "duration", config.Duration, "Test duration (default: 5m)")
+	fs.DurationVar(&config.ReportInterval, "report-interval", config.ReportInterval, "Interval for periodic reports")
+	fs.IntVar(&config.PacketSize, "packet-size", config.PacketSize, "Size of test packets in bytes (0=auto-detect)")
+	fs.IntVar(&config.Port, "port", config.Port, "Port to use for testing")
+	fs.IntVar(&config.ApiServerPort, "api-server-port", config.ApiServerPort, "If set, will start API server on this port to get stats")
+	fs.IntVar(&config.PPS, "pps", config.PPS, "Packets per second per connection (0=unlimited)")
+	fs.BoolVar(&config.ThroughputMode, "throughput-mode", config.ThroughputMode, "Enable throughput mode optimizations")
+	fs.IntVar(&config.BufferSize, "buffer-size", config.BufferSize, "Buffer size for throughput mode (0=auto)")
+	fs.BoolVar(&config.TCPNoDelay, "tcp-nodelay", config.TCPNoDelay, "Enable TCP_NODELAY")
+	fs.BoolVar(&config.UseOptimized, "optimized", config.UseOptimized, "Use optimized connections")
+	fs.BoolVar(&config.EnableIOUring, "io-uring", config.EnableIOUring, "Enable io_uring on Linux")
+	fs.BoolVar(&config.EnableHugePages, "huge-pages", config.EnableHugePages, "Enable huge pages")
+	fs.BoolVar(&config.EnableOffload, "hw-offload", config.EnableOffload, "Enable hardware offloading")
+	fs.IntVar(&config.SendBatchSize, "send-batch-size", config.SendBatchSize, "Send batch size")
+	fs.IntVar(&config.RecvBatchSize, "recv-batch-size", config.RecvBatchSize, "Receive batch size")
+	fs.IntVar(&config.NumQueues, "num-queues", config.NumQueues, "Number of queues (0=auto)")
+	fs.IntVar(&config.BusyPollUsecs, "busy-poll-usecs", config.BusyPollUsecs, "Busy polling microseconds")
+	fs.BoolVar(&config.TCPCork, "tcp-cork", config.TCPCork, "Enable TCP_CORK")
+	fs.BoolVar(&config.TCPQuickAck, "tcp-quickack", config.TCPQuickAck, "Enable TCP_QUICKACK")
+	fs.IntVar(&config.MemArenaSize, "memory-arena-size", config.MemArenaSize, "Memory arena size (default: 256MB)")
+	fs.IntVar(&config.RingSize, "ring-size", config.RingSize, "Ring buffer size")
+	fs.IntVar(&config.NumWorkers, "num-workers", config.NumWorkers, "Number of workers (0=auto)")
+	fs.StringVar(&config.CPUList, "cpu-list", config.CPUList, "CPU affinity list")
+	fs.StringVar(&config.ReportTo, "report-to", config.ReportTo, "API endpoint to report statistics to")
 
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -63,7 +61,7 @@ func RunCommand(args []string) {
 	runWithConfig(config)
 }
 
-func runWithConfig(config *testing.RunConfig) {
+func runWithConfig(config *testing.TestConfig) {
 	// Runtime optimizations
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	debug.SetGCPercent(200)
@@ -78,146 +76,40 @@ func runWithConfig(config *testing.RunConfig) {
 		log.Fatal("Could not detect local IP from provided list")
 	}
 
-	// Calculate concurrency if not specified
-	if config.Concurrency == 0 {
-		numTargets := len(ipList) - 1 // Number of other servers to connect to
-		if numTargets > 0 {
-			// Calculate connections per target to distribute evenly
-			baseConnections := config.TotalConnections / numTargets
-			remainder := config.TotalConnections % numTargets
-
-			// If we have a remainder, round up to ensure uniform distribution
-			if remainder > 0 {
-				config.Concurrency = baseConnections + 1
-				actualTotal := config.Concurrency * numTargets
-				log.Printf("Auto-adjusting: increasing total connections from %d to %d for uniform distribution (%d per target)",
-					config.TotalConnections, actualTotal, config.Concurrency)
-				config.TotalConnections = actualTotal
-			} else {
-				config.Concurrency = baseConnections
-			}
-
-			// Ensure minimum of 2 connections per target
-			minConnectionsPerTarget := 2
-			if config.Concurrency < minConnectionsPerTarget {
-				config.Concurrency = minConnectionsPerTarget
-				actualTotal := config.Concurrency * numTargets
-				log.Printf("Minimum connections: increasing total connections from %d to %d to maintain minimum %d connections per target",
-					config.TotalConnections, actualTotal, minConnectionsPerTarget)
-				config.TotalConnections = actualTotal
-			}
-
-			log.Printf("Configuration: %d total connections, %d targets, %d connections per target",
-				config.TotalConnections, numTargets, config.Concurrency)
-		} else {
-			// Single node (loopback testing)
-			config.Concurrency = config.TotalConnections
-			log.Printf("Single node configuration: %d connections", config.Concurrency)
-		}
-	}
-
-	// Auto-detect packet size
-	if config.PacketSize == 0 {
-		mtu, err := performance.GetMTU(localIP)
-		if err != nil {
-			mtu = 9000
-		}
-		if mtu >= 9000 {
-			if config.Protocol == "udp" {
-				config.PacketSize = 8972
-			} else {
-				config.PacketSize = mtu - 40
-			}
-		} else {
-			config.PacketSize = performance.CalculateOptimalPacketSize(mtu, config.Protocol)
-		}
-	}
-
 	log.Printf("Starting gosmesh run mode")
 	log.Printf("Local IP: %s", localIP)
 	log.Printf("Protocol: %s", config.Protocol)
 	log.Printf("Duration: %v", config.Duration)
 
-	// Auto-enable throughput mode
-	if config.PPS == 0 {
-		config.ThroughputMode = true
-	}
-
-	if config.ThroughputMode && config.BufferSize == 0 {
-		if config.Protocol == "tcp" {
-			config.BufferSize = 4194304 // 4MB
-		} else {
-			config.BufferSize = 1048576 // 1MB
-		}
-	}
-
-	tester := testing.NewNetworkTester(localIP, ipList, config.Protocol, config.Concurrency,
-		config.Duration, config.ReportInterval, config.PacketSize, config.Port, config.PPS, config.ApiServerPort)
-
-	// Configure tester with all settings
-	tester.UseOptimized = config.UseOptimized
-	tester.EnableIOUring = config.EnableIOUring
-	tester.EnableHugePages = config.EnableHugePages
-	tester.EnableOffload = config.EnableOffload
-	tester.BufferSize = config.BufferSize
-	tester.SendBatchSize = config.SendBatchSize
-	tester.RecvBatchSize = config.RecvBatchSize
-	tester.NumQueues = config.NumQueues
-	tester.BusyPollUsecs = config.BusyPollUsecs
-	tester.TCPCork = config.TCPCork
-	tester.TCPQuickAck = config.TCPQuickAck
-	tester.TCPNoDelay = config.TCPNoDelay
-	tester.MemArenaSize = config.MemArenaSize
-	tester.RingSize = config.RingSize
-	tester.NumWorkers = config.NumWorkers
-	tester.CPUList = config.CPUList
-
-	// Set up API reporting if configured
-	if config.ReportTo != "" {
-		log.Printf("Reporting stats to: %s", config.ReportTo)
-		tester.EnableAPIReporting(config.ReportTo, localIP)
-	}
+	// Create tester (will auto-calculate settings via StartWithConfig)
+	tester := testing.NewNetworkTester("", []string{}, "tcp", 0, 0, 0, 0, 0, 0, config.ApiServerPort)
 
 	// Signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		sig := <-sigChan
-		log.Printf("\n⚠️  Received signal: %v - initiating graceful shutdown...", sig)
-		tester.Stop()
-	}()
-
-	// Start test
-	if err := tester.Start(); err != nil {
+	// Start test with config - this will handle all auto-calculations
+	if err := tester.StartWithConfig(config); err != nil {
 		log.Fatalf("Failed to start test: %v", err)
 	}
 
-	// Wait for test with signal monitoring
-	// Create a done channel to know when Wait() completes
-	done := make(chan struct{})
-	go func() {
-		tester.Wait()
-		close(done)
-	}()
-
-	// Wait for either normal completion or a second signal for force exit
+	// Wait for test completion, monitoring for signals
 	select {
-	case <-done:
-		// Normal completion
+	case <-tester.GetTestDone():
+		// Test completed normally
+		log.Printf("Test completed successfully")
 	case sig := <-sigChan:
-		// Force exit on second signal
-		log.Printf("\n⚠️  Received second signal: %v - forcing exit...", sig)
-		_ = tester.StopAPIServer()
-		os.Exit(1)
+		// User interrupted - force stop
+		log.Printf("\n⚠️  Received signal: %v - forcing exit...", sig)
+		tester.StopAndFinalize()
+		// Wait briefly for cleanup
+		select {
+		case <-tester.GetTestDone():
+		case <-time.After(2 * time.Second):
+			log.Printf("Timeout waiting for test cleanup")
+		}
 	}
 
-	// Generate final report
-	report := tester.GenerateFinalReport()
-	fmt.Println(report)
-
-	// Stop API server gracefully
-	_ = tester.StopAPIServer()
 }
 
 func parseIPs(ipStr string) []string {
