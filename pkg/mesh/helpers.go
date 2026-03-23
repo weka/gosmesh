@@ -108,8 +108,8 @@ func getLocalIPAddress() string {
 	return ""
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
+// minInt returns the minimum of two integers
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
@@ -117,7 +117,7 @@ func min(a, b int) int {
 }
 
 // handleDeploymentResults processes deployment results
-func (mc *Controller) handleDeploymentResults(results *workers.Results[target]) {
+func (mc *Controller) handleDeploymentResults(results *workers.Results[Target]) {
 	successCount := 0
 	failCount := 0
 
@@ -151,7 +151,7 @@ func (mc *Controller) handleDeploymentResults(results *workers.Results[target]) 
 }
 
 // handleServiceStartResults processes service start results
-func (mc *Controller) handleServiceStartResults(results *workers.Results[target]) {
+func (mc *Controller) handleServiceStartResults(results *workers.Results[Target]) {
 	successCount := 0
 	failCount := 0
 
@@ -189,6 +189,50 @@ func (mc *Controller) handleServiceStartResults(results *workers.Results[target]
 			fmt.Printf("Done (✅ %d, ❌ %d)\n", successCount, failCount)
 			if successCount == 0 {
 				fmt.Printf("⚠️  No services started - use --verbose for details\n")
+			}
+		}
+	}
+}
+
+// handleTestStartResults processes HTTP test start results
+func (mc *Controller) handleTestStartResults(results *workers.Results[Target]) {
+	successCount := 0
+	failCount := 0
+
+	for _, result := range results.Items {
+		if result.Err != nil {
+			if mc.config.Verbose {
+				log.Printf("[RESULT] ❌ %s: FAILED - %v", result.Object.IP, result.Err)
+			}
+			failCount++
+		} else {
+			if mc.config.Verbose {
+				log.Printf("[RESULT] ✅ %s: SUCCESS", result.Object.IP)
+			}
+			successCount++
+		}
+	}
+
+	if mc.config.Verbose {
+		log.Println("\n========== TEST START SUMMARY ==========")
+		log.Printf("✅ Successful starts: %d/%d", successCount, len(results.Items))
+		if failCount > 0 {
+			log.Printf("❌ Failed starts: %d/%d", failCount, len(results.Items))
+		}
+		log.Println("========================================")
+
+		if successCount > 0 {
+			log.Println("Now monitoring mesh performance...")
+		} else {
+			log.Println("⚠️  No tests started successfully - check diagnostics above")
+		}
+	} else {
+		if failCount == 0 {
+			fmt.Printf("Done (✅ %d/%d)\n", successCount, len(results.Items))
+		} else {
+			fmt.Printf("Done (✅ %d, ❌ %d)\n", successCount, failCount)
+			if successCount == 0 {
+				fmt.Printf("⚠️  No tests started - use --verbose for details\n")
 			}
 		}
 	}

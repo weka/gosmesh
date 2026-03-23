@@ -52,14 +52,6 @@ func ExampleHighPerformance() {
 		0, // do not start API server
 	)
 
-	// Configure for high performance
-	tester.UseOptimized = true
-	tester.BufferSize = 4194304 // 4MB buffers
-	tester.TCPNoDelay = true    // Disable Nagle
-	tester.NumWorkers = 4
-	tester.SendBatchSize = 64
-	tester.RecvBatchSize = 64
-
 	if err := tester.Start(); err != nil {
 		log.Fatal(err)
 	}
@@ -147,7 +139,7 @@ func ExampleEarlyStop() {
 
 	// Let it run for 30 seconds, then stop early
 	time.Sleep(30 * time.Second)
-	tester.Stop()
+	tester.StopAndFinalize()
 
 	// Wait for graceful shutdown
 	tester.Wait()

@@ -8,14 +8,13 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/weka/gosmesh/pkg/network"
+	"github.com/weka/gosmesh/pkg/version"
 )
 
 // TargetMetrics contains performance metrics for a single target.
@@ -116,39 +115,6 @@ type TestResults struct {
 	Message    string `json:"message,omitempty"`
 }
 
-// RunConfig defines a single test configuration
-type RunConfig struct {
-	LocalIP          string        `json:"local_ip"`
-	IPs              string        `json:"ips"`
-	Protocol         string        `json:"protocol"`
-	TotalConnections int           `json:"total_connections"`
-	Concurrency      int           `json:"concurrency"`
-	Duration         time.Duration `json:"duration"`
-	ReportInterval   time.Duration `json:"report_interval"`
-	PacketSize       int           `json:"packet_size"`
-	Port             int           `json:"port"`
-	PPS              int           `json:"pps"`
-	ThroughputMode   bool          `json:"throughput_mode"`
-	BufferSize       int           `json:"buffer_size"`
-	TCPNoDelay       bool          `json:"tcp_no_delay"`
-	UseOptimized     bool          `json:"use_optimized"`
-	EnableIOUring    bool          `json:"enable_io_uring"`
-	EnableHugePages  bool          `json:"enable_huge_pages"`
-	EnableOffload    bool          `json:"enable_offload"`
-	SendBatchSize    int           `json:"send_batch_size"`
-	RecvBatchSize    int           `json:"recv_batch_size"`
-	NumQueues        int           `json:"num_queues"`
-	BusyPollUsecs    int           `json:"busy_poll_usecs"`
-	TCPCork          bool          `json:"tcp_cork"`
-	TCPQuickAck      bool          `json:"tcp_quick_ack"`
-	MemArenaSize     int           `json:"mem_arena_size"`
-	RingSize         int           `json:"ring_size"`
-	NumWorkers       int           `json:"num_workers"`
-	CPUList          string        `json:"cpu_list"`
-	ReportTo         string        `json:"report_to"`
-	ApiServerPort    int           `json:"api_server_port"`
-}
-
 // NetworkTester orchestrates network performance testing across multiple targets.
 // It creates connections to all target IPs and measures performance metrics.
 //
@@ -173,15 +139,7 @@ type RunConfig struct {
 //	report := tester.GenerateFinalReport()
 //	fmt.Println(report)
 type NetworkTester struct {
-	localIP        string
-	targetIPs      []string
-	protocol       string
-	concurrency    int
-	duration       time.Duration
-	reportInterval time.Duration
-	packetSize     int
-	port           int
-	pps            int
+	config *TestConfig // Source of truth for all configuration
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -195,40 +153,21 @@ type NetworkTester struct {
 
 	networkServer *network.Server
 
-	// Optimization flags
-	UseOptimized    bool
-	EnableIOUring   bool
-	EnableHugePages bool
-	EnableOffload   bool
-
-	// Performance tuning parameters
-	BufferSize    int
-	SendBatchSize int
-	RecvBatchSize int
-	NumQueues     int
-	BusyPollUsecs int
-	TCPCork       bool
-	TCPQuickAck   bool
-	TCPNoDelay    bool
-	MemArenaSize  int
-	RingSize      int
-	NumWorkers    int
-	CPUList       string
-
 	// API reporting
 	apiEndpoint string
 	apiReportIP string
 	apiTicker   *time.Ticker
 
 	// API Server
-	apiServer     *http.Server
-	apiServerPort int
+	apiServer *http.Server
 
 	// Server control state
-	isRunning     bool
-	currentConfig *RunConfig
-	lastError     string
-	controlMu     sync.RWMutex // For protecting control state
+	isRunning bool
+	lastError string
+	controlMu sync.RWMutex // For protecting control state
+
+	// testDone signals when the controlled test has completed (including report generation)
+	testDone chan struct{}
 }
 
 // ServerStats contains minimal statistics for a single networkServer for aggregated reporting
@@ -262,44 +201,156 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	config := GetDefaultTestConfig()
+	config.IPs = strings.Join(ips, ",")
+	config.Protocol = protocol
+	config.Duration = duration
+	config.ReportInterval = reportInterval
+	config.PacketSize = packetSize
+	config.Port = port
+	config.PPS = pps
+	config.LocalIP = localIP
+	config.ApiServerPort = apiServerPort
+
 	return &NetworkTester{
-		localIP:        localIP,
-		targetIPs:      ips,
-		protocol:       protocol,
-		concurrency:    concurrency,
-		duration:       duration,
-		reportInterval: reportInterval,
-		packetSize:     packetSize,
-		port:           port,
-		pps:            pps,
-		ctx:            ctx,
-		cancel:         cancel,
-		apiServerPort:  apiServerPort,
+		config:   config,
+		ctx:      ctx,
+		cancel:   cancel,
+		testDone: make(chan struct{}),
 	}
 }
 
-// Reconfigure updates the tester's configuration for the next test run.
+// reconfigure updates the tester's configuration for the next test run.
 // This allows reusing the same NetworkTester instance for multiple tests without reinstantiation.
 // Must be called when no test is currently running (after Stop() and Wait() complete).
-func (nt *NetworkTester) Reconfigure(localIP string, targetIPs []string, protocol string,
+// Replicates the auto-calculation logic from runWithConfig.
+func (nt *NetworkTester) reconfigure(localIP string, targetIPs []string, protocol string,
 	concurrency int, duration, reportInterval time.Duration, packetSize, port, pps int) error {
 
-	nt.controlMu.Lock()
-	defer nt.controlMu.Unlock()
-	if nt.isRunning {
-		return fmt.Errorf("NetworkTester is already running, cannot reconfigure")
+	// Update basic configuration in config
+	nt.config.LocalIP = localIP
+	if nt.config.LocalIP == "" {
+		nt.config.LocalIP = detectLocalIP(targetIPs)
 	}
 
-	// Update configuration
-	nt.localIP = localIP
-	nt.targetIPs = targetIPs
-	nt.protocol = protocol
-	nt.concurrency = concurrency
-	nt.duration = duration
-	nt.reportInterval = reportInterval
-	nt.packetSize = packetSize
-	nt.port = port
-	nt.pps = pps
+	nt.config.IPs = strings.Join(targetIPs, ",")
+	nt.config.Protocol = protocol
+	nt.config.Duration = duration
+	nt.config.ReportInterval = reportInterval
+	nt.config.Port = port
+	nt.config.PPS = pps
+
+	// Auto-calculate concurrency if not specified (matching runWithConfig logic)
+	if concurrency == 0 {
+		numTargets := len(targetIPs) - 1 // Number of other servers to connect to (excluding self)
+		if numTargets > 0 {
+			// Use TotalConnections as the base for auto-calculation
+			totalConnections := nt.config.TotalConnections
+
+			// Calculate connections per target to distribute evenly
+			baseConnections := totalConnections / numTargets
+			remainder := totalConnections % numTargets
+
+			// If we have a remainder, round up to ensure uniform distribution
+			if remainder > 0 {
+				concurrency = baseConnections + 1
+				actualTotal := concurrency * numTargets
+				log.Printf("Auto-adjusting: increasing total connections from %d to %d for uniform distribution (%d per target)",
+					totalConnections, actualTotal, concurrency)
+				nt.config.TotalConnections = actualTotal
+			} else {
+				concurrency = baseConnections
+			}
+
+			// Ensure minimum of 2 connections per target
+			minConnectionsPerTarget := 2
+			if concurrency < minConnectionsPerTarget {
+				concurrency = minConnectionsPerTarget
+				actualTotal := concurrency * numTargets
+				log.Printf("Minimum connections: increasing total connections from %d to %d to maintain minimum %d connections per target",
+					totalConnections, actualTotal, minConnectionsPerTarget)
+				nt.config.TotalConnections = actualTotal
+			}
+
+			log.Printf("Configuration: %d total connections, %d targets, %d connections per target",
+				nt.config.TotalConnections, numTargets, concurrency)
+		} else {
+			// Single node (loopback testing)
+			concurrency = nt.config.TotalConnections
+			log.Printf("Single node configuration: %d connections", concurrency)
+		}
+	}
+	nt.config.Concurrency = concurrency
+
+	// Auto-detect packet size if not specified (matching runWithConfig logic)
+	if packetSize == 0 {
+		// Assume jumbo frame capability for modern networks
+		// In production, this would call performance.GetMTU(localIP)
+		mtu := 9000 // Default to jumbo frame capability
+
+		if mtu >= 9000 {
+			if protocol == "udp" {
+				packetSize = 8972 // Max UDP payload
+			} else {
+				packetSize = mtu - 40 // Account for IP/TCP headers
+			}
+			log.Printf("Auto-detected packet size (jumbo frames): %d bytes", packetSize)
+		} else {
+			if protocol == "udp" {
+				packetSize = 1472 // Standard UDP
+			} else {
+				packetSize = 1460 // Standard TCP
+			}
+			log.Printf("Auto-detected packet size (standard): %d bytes", packetSize)
+		}
+	}
+	nt.config.PacketSize = packetSize
+
+	// Auto-enable throughput mode if PPS not specified (matching runWithConfig logic)
+	// Throughput mode is determined by pps == 0 (unlimited)
+	if pps == 0 {
+		log.Printf("Throughput mode enabled (unlimited PPS)")
+		nt.config.ThroughputMode = true
+	} else {
+		log.Printf("Packet mode enabled (PPS: %d)", pps)
+		nt.config.ThroughputMode = false
+	}
+
+	// Auto-calculate buffer size for throughput mode if not specified (matching runWithConfig logic)
+	// Throughput mode is when pps == 0
+	if pps == 0 && nt.config.BufferSize == 0 {
+		if protocol == "tcp" {
+			nt.config.BufferSize = 4194304 // 4MB
+		} else {
+			nt.config.BufferSize = 1048576 // 1MB
+		}
+		log.Printf("Auto-selected buffer size for throughput mode: %d bytes", nt.config.BufferSize)
+	}
+
+	// Auto-calculate num_workers if not specified
+	if nt.config.NumWorkers == 0 {
+		numCPU := runtime.NumCPU()
+		if numCPU > 0 {
+			nt.config.NumWorkers = numCPU / 2 // Use half the CPUs
+			if nt.config.NumWorkers < 1 {
+				nt.config.NumWorkers = 1
+			}
+			log.Printf("Auto-calculated num_workers: %d (based on %d CPUs)", nt.config.NumWorkers, numCPU)
+		}
+	}
+
+	// Auto-calculate num_queues if not specified
+	if nt.config.NumQueues == 0 {
+		// Use concurrency as guide for number of queues
+		nt.config.NumQueues = concurrency
+		if nt.config.NumQueues > 16 {
+			nt.config.NumQueues = 16 // Cap at 16 queues
+		}
+		if nt.config.NumQueues < 1 {
+			nt.config.NumQueues = 1
+		}
+		log.Printf("Auto-calculated num_queues: %d", nt.config.NumQueues)
+	}
 
 	// Clear old connections
 	nt.mu.Lock()
@@ -319,11 +370,15 @@ func (nt *NetworkTester) Reconfigure(localIP string, targetIPs []string, protoco
 	nt.startTime = time.Time{}
 	nt.endTime = time.Time{}
 
-	// Reset WaitGroup
-	nt.wg = sync.WaitGroup{}
+	// Set up API reporting if configured
+	if nt.config.ReportTo != "" {
+		log.Printf("Reporting stats to: %s", nt.config.ReportTo)
+		nt.EnableAPIReporting(nt.config.ReportTo, localIP)
+	}
 
-	log.Printf("NetworkTester reconfigured: IPs=%v, Protocol=%s, Concurrency=%d, Duration=%v",
-		targetIPs, protocol, concurrency, duration)
+	isThroughputMode := pps == 0
+	log.Printf("NetworkTester reconfigured: IPs=%v, Protocol=%s, Concurrency=%d, PacketSize=%d, ThroughputMode=%v, Duration=%v",
+		targetIPs, protocol, nt.config.Concurrency, nt.config.PacketSize, isThroughputMode, duration)
 
 	return nil
 }
@@ -339,9 +394,9 @@ func (nt *NetworkTester) Reconfigure(localIP string, targetIPs []string, protoco
 //
 // The networkServer listens on the specified port and handles both remote control commands
 // and results queries from the same unified interface.
-func (nt *NetworkTester) StartHTTPServer(port int) error {
+func (nt *NetworkTester) StartHTTPServer() error {
 	if nt != nil && nt.apiServer != nil {
-		log.Printf("NetworkTester has already http networkServer on port %d", port)
+		log.Printf("NetworkTester has already http networkServer on port %d", nt.config.ApiServerPort)
 		return nil
 	}
 	mux := http.NewServeMux()
@@ -361,31 +416,11 @@ func (nt *NetworkTester) StartHTTPServer(port int) error {
 	mux.HandleFunc("/health", nt.handleHealth)
 
 	// Create HTTP networkServer
-	addr := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port))
+	addr := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", nt.config.ApiServerPort))
 	nt.apiServer = &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}
-
-	// Setup graceful shutdown handler
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Printf("\n⚠️  Received signal: %v - shutting down HTTP networkServer...", sig)
-
-		// Stop any running test
-		nt.controlMu.Lock()
-		if nt.isRunning {
-			log.Printf("Stopping running test...")
-			nt.Stop()
-		}
-		nt.controlMu.Unlock()
-
-		// Shutdown networkServer
-		_ = nt.apiServer.Close()
-	}()
 
 	// Start networkServer in background
 	nt.wg.Add(1)
@@ -402,10 +437,21 @@ func (nt *NetworkTester) StartHTTPServer(port int) error {
 	return nil
 }
 
-// StartWithConfig accepts a RunConfig and attempts to start the test.
+// StopHTTPServer gracefully stops the HTTP server
+func (nt *NetworkTester) StopHTTPServer() {
+	if nt.apiServer != nil {
+		if err := nt.apiServer.Close(); err != nil {
+			log.Printf("Error closing HTTP server: %v", err)
+		}
+		nt.apiServer = nil
+	}
+}
+
+// StartWithConfig accepts a TestConfig and attempts to start the test.
 // If a test is already running, it returns an error.
 // The test runs asynchronously in the background.
-func (nt *NetworkTester) StartWithConfig(config *RunConfig) error {
+// Missing/zero fields in config are filled with defaults.
+func (nt *NetworkTester) StartWithConfig(config *TestConfig) error {
 	nt.controlMu.Lock()
 	defer nt.controlMu.Unlock()
 
@@ -414,41 +460,47 @@ func (nt *NetworkTester) StartWithConfig(config *RunConfig) error {
 		return fmt.Errorf("test is already running")
 	}
 
-	// Reconfigure the tester with the provided config
-	if err := nt.Reconfigure(
-		config.LocalIP,
-		strings.Split(config.IPs, ","),
-		config.Protocol,
-		config.Concurrency,
-		config.Duration,
-		config.ReportInterval,
-		config.PacketSize,
-		config.Port,
-		config.PPS,
+	// Wait for any previous test goroutines to complete
+	// This prevents WaitGroup counter issues when reusing the tester
+	// Create a channel to signal when all goroutines are done
+	done := make(chan struct{})
+	go func() {
+		nt.wg.Wait()
+		close(done)
+	}()
+
+	// Wait with timeout to prevent hanging
+	select {
+	case <-done:
+		// All previous goroutines completed
+		log.Printf("Previous test goroutines completed, starting new test")
+	case <-time.After(1 * time.Second):
+		// Timeout - some goroutines may still be running
+		log.Printf("Warning: timeout waiting for previous test to complete, proceeding anyway")
+	}
+
+	// Merge provided config with defaults - any zero values use defaults
+	defaults := GetDefaultTestConfig()
+	mergedConfig := MergeTestConfig(defaults, config)
+
+	// Apply merged config to the tester
+	nt.config = mergedConfig
+
+	// Reconfigure the tester with the merged config
+	if err := nt.reconfigure(
+		mergedConfig.LocalIP,
+		strings.Split(mergedConfig.IPs, ","),
+		mergedConfig.Protocol,
+		mergedConfig.Concurrency,
+		mergedConfig.Duration,
+		mergedConfig.ReportInterval,
+		mergedConfig.PacketSize,
+		mergedConfig.Port,
+		mergedConfig.PPS,
 	); err != nil {
 		return fmt.Errorf("failed to reconfigure tester: %v", err)
 	}
 
-	// Apply optimization flags and performance tuning parameters
-	nt.UseOptimized = config.UseOptimized
-	nt.EnableIOUring = config.EnableIOUring
-	nt.EnableHugePages = config.EnableHugePages
-	nt.EnableOffload = config.EnableOffload
-	nt.BufferSize = config.BufferSize
-	nt.SendBatchSize = config.SendBatchSize
-	nt.RecvBatchSize = config.RecvBatchSize
-	nt.NumQueues = config.NumQueues
-	nt.BusyPollUsecs = config.BusyPollUsecs
-	nt.TCPCork = config.TCPCork
-	nt.TCPQuickAck = config.TCPQuickAck
-	nt.TCPNoDelay = config.TCPNoDelay
-	nt.MemArenaSize = config.MemArenaSize
-	nt.RingSize = config.RingSize
-	nt.NumWorkers = config.NumWorkers
-	nt.CPUList = config.CPUList
-
-	// Store config for status reporting
-	nt.currentConfig = config
 	nt.isRunning = true
 	nt.startTime = time.Now()
 	nt.lastError = ""
@@ -467,6 +519,7 @@ func (nt *NetworkTester) handleStats(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to encode current stats: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"error":"Failed to encode stats: %v"}`, err)))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -491,7 +544,7 @@ func (nt *NetworkTester) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = r // Unused parameter
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, `{"status":"ok","message":"HTTP networkServer is running"}`)
+	_, _ = fmt.Fprintf(w, `{"status":"ok","versionHash":"%s"}`, version.GetVersionHash())
 }
 
 // handleStart handles POST /start requests to start a new test
@@ -501,7 +554,7 @@ func (nt *NetworkTester) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var config RunConfig
+	var config TestConfig
 	// Parse configuration from request body
 	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
@@ -541,7 +594,7 @@ func (nt *NetworkTester) handleStop(w http.ResponseWriter, r *http.Request) {
 	nt.controlMu.Unlock()
 
 	log.Printf("Stopping test via control networkServer...")
-	nt.Stop()
+	nt.StopAndFinalize()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -557,17 +610,22 @@ func (nt *NetworkTester) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nt.controlMu.RLock()
-	defer nt.controlMu.RUnlock()
-
 	status := map[string]interface{}{
 		"running": nt.isRunning,
 	}
 
+	locked := nt.controlMu.TryRLock()
+	if !locked {
+		_ = json.NewEncoder(w).Encode(status)
+		http.Error(w, "Unable to acquire status lock, try again later", http.StatusServiceUnavailable)
+		return
+	}
+	defer nt.controlMu.RUnlock()
+
 	if nt.isRunning {
 		status["uptime_seconds"] = time.Since(nt.startTime).Seconds()
-		if nt.currentConfig != nil {
-			status["config"] = nt.currentConfig
+		if nt.config != nil {
+			status["config"] = nt.config
 		}
 	}
 
@@ -584,9 +642,16 @@ func (nt *NetworkTester) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (nt *NetworkTester) runControlledTest() {
 	defer func() {
 		nt.controlMu.Lock()
+		wasRunning := nt.isRunning
 		nt.isRunning = false
 		nt.controlMu.Unlock()
-		log.Printf("Controlled test completed")
+
+		if wasRunning {
+			log.Printf("Controlled test completed")
+		}
+
+		// Signal that the test is done
+		close(nt.testDone)
 	}()
 
 	// Start test
@@ -602,10 +667,6 @@ func (nt *NetworkTester) runControlledTest() {
 
 	// Wait for test completion
 	nt.Wait()
-
-	// Generate final report
-	report := nt.GenerateFinalReport()
-	log.Printf("Controlled test completed. Report:\n%s", report)
 }
 
 // Start begins the network testing.
@@ -614,13 +675,13 @@ func (nt *NetworkTester) runControlledTest() {
 func (nt *NetworkTester) Start() error {
 	nt.startTime = time.Now()
 
-	if nt.apiServerPort > 0 {
-		if err := nt.StartHTTPServer(nt.apiServerPort); err != nil {
+	if nt.config.ApiServerPort > 0 {
+		if err := nt.StartHTTPServer(); err != nil {
 			log.Printf("Failed to start API networkServer: %v\n", err)
 		}
 	}
 	// Start networkServer
-	nt.networkServer = network.NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
+	nt.networkServer = network.NewServer(nt.config.LocalIP, nt.config.Port, nt.config.Protocol, nt.config.PacketSize)
 	if err := nt.networkServer.Start(); err != nil {
 		return fmt.Errorf("failed to start networkServer: %v", err)
 	}
@@ -631,51 +692,37 @@ func (nt *NetworkTester) Start() error {
 		nt.networkServer.Run(nt.ctx)
 	}()
 
-	// Give servers time to start on all nodes
-	// This is critical - without enough delay, clients will exhaust retries
-	// In mesh mode, ALL nodes must have their servers ready before ANY connections start
-	log.Printf("Waiting 10 seconds for all servers to start across the mesh...")
-
-	// Use a timer with context monitoring so this can be interrupted by signals
-	startupTimer := time.NewTimer(10 * time.Second)
-	defer startupTimer.Stop()
-
-	select {
-	case <-startupTimer.C:
-		// Startup wait completed normally
-	case <-nt.ctx.Done():
-		// Context cancelled (e.g., signal received)
-		log.Printf("Interrupted during networkServer startup wait")
-		return fmt.Errorf("interrupted during networkServer startup wait")
-	}
-
 	// Create connections to all targets (excluding self)
-	for _, targetIP := range nt.targetIPs {
-		if targetIP == nt.localIP {
+	connectionCount := 0
+	targetIPs := strings.Split(nt.config.IPs, ",")
+	for _, targetIP := range targetIPs {
+		if targetIP == nt.config.LocalIP {
 			continue // Skip self
 		}
 
-		for i := 0; i < nt.concurrency; i++ {
+		log.Printf("Creating %d connections to target %s", nt.config.Concurrency, targetIP)
+		for i := 0; i < nt.config.Concurrency; i++ {
 			// Create connection
-			conn := network.NewConnection(nt.localIP, targetIP, nt.port, nt.protocol, nt.packetSize, nt.pps, i)
+			conn := network.NewConnection(nt.config.LocalIP, targetIP, nt.config.Port, nt.config.Protocol, nt.config.PacketSize, nt.config.PPS, i)
 
 			// Set optimization flag
-			conn.UseOptimized = nt.UseOptimized
+			conn.UseOptimized = nt.config.UseOptimized
 
 			// Apply performance tuning parameters
-			if nt.BufferSize > 0 {
-				conn.BufferSize = nt.BufferSize
+			if nt.config.BufferSize > 0 {
+				conn.BufferSize = nt.config.BufferSize
 			}
-			if nt.NumWorkers > 0 {
-				conn.NumWorkers = nt.NumWorkers
+			if nt.config.NumWorkers > 0 {
+				conn.NumWorkers = nt.config.NumWorkers
 			}
-			conn.SendBatchSize = nt.SendBatchSize
-			conn.RecvBatchSize = nt.RecvBatchSize
-			conn.TCPCork = nt.TCPCork
-			conn.TCPQuickAck = nt.TCPQuickAck
-			conn.TCPNoDelay = nt.TCPNoDelay
-			conn.BusyPollUsecs = nt.BusyPollUsecs
+			conn.SendBatchSize = nt.config.SendBatchSize
+			conn.RecvBatchSize = nt.config.RecvBatchSize
+			conn.TCPCork = nt.config.TCPCork
+			conn.TCPQuickAck = nt.config.TCPQuickAck
+			conn.TCPNoDelay = nt.config.TCPNoDelay
+			conn.BusyPollUsecs = nt.config.BusyPollUsecs
 			nt.connections = append(nt.connections, conn)
+			connectionCount++
 
 			// Start connection goroutine
 			nt.wg.Add(1)
@@ -687,6 +734,7 @@ func (nt *NetworkTester) Start() error {
 			}(conn)
 		}
 	}
+	log.Printf("Created %d total connections", connectionCount)
 
 	// Start periodic reporting
 	nt.wg.Add(1)
@@ -698,11 +746,11 @@ func (nt *NetworkTester) Start() error {
 	}
 
 	// Schedule test end
-	if nt.duration > 0 {
-		log.Printf("Test will stop automatically after %v", nt.duration)
-		time.AfterFunc(nt.duration, func() {
-			log.Printf("Test duration (%v) reached, stopping...", nt.duration)
-			nt.Stop()
+	if nt.config.Duration > 0 {
+		log.Printf("Test will stop automatically after %v", nt.config.Duration)
+		time.AfterFunc(nt.config.Duration, func() {
+			log.Printf("Test duration (%v) reached, stopping...", nt.config.Duration)
+			nt.StopAndFinalize()
 		})
 	}
 
@@ -712,7 +760,7 @@ func (nt *NetworkTester) Start() error {
 // periodicReporter prints periodic reports at the configured interval.
 func (nt *NetworkTester) periodicReporter() {
 	defer nt.wg.Done()
-	ticker := time.NewTicker(nt.reportInterval)
+	ticker := time.NewTicker(nt.config.ReportInterval)
 	defer ticker.Stop()
 
 	for {
@@ -734,16 +782,16 @@ func (nt *NetworkTester) generatePeriodicReport() string {
 	elapsed := time.Since(nt.startTime)
 	report := fmt.Sprintf("\n=== Periodic Report (Elapsed: %v) ===\n", elapsed.Round(time.Second))
 
-	throughputMode := nt.pps <= 0 // Check if in throughput mode
+	throughputMode := nt.config.PPS <= 0 // Check if in throughput mode
 
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
-		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.TargetIP, conn.ID, nt.protocol)
+		report += fmt.Sprintf("Target: %s (conn-%d) | Protocol: %s\n", conn.TargetIP, conn.ID, nt.config.Protocol)
 
 		// Show packet loss only for UDP in packet mode
 		if throughputMode {
 			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (throughput mode)\n", stats.PacketsSent)
-		} else if nt.protocol == "tcp" {
+		} else if nt.config.Protocol == "tcp" {
 			report += fmt.Sprintf("  Sent: %d | Packet Loss: Not applicable (use UDP for packet loss testing)\n", stats.PacketsSent)
 		} else {
 			report += fmt.Sprintf("  Sent: %d | Received: %d | Lost: %d (%.2f%%)\n",
@@ -815,7 +863,7 @@ func (nt *NetworkTester) sendAPIReport() {
 	targetReconnects := make(map[string]int64)
 
 	nt.mu.RLock()
-	throughputMode := nt.pps <= 0 // Check if we're in throughput mode
+	throughputMode := nt.config.PPS <= 0 // Check if we're in throughput mode
 
 	for _, conn := range nt.connections {
 		stats := conn.GetStats()
@@ -884,7 +932,7 @@ func (nt *NetworkTester) sendAPIReport() {
 
 	// Create stats payload
 	stats := &ServerStats{
-		IP:               nt.apiReportIP,
+		IP:               nt.config.LocalIP,
 		Throughput:       throughputGbps,
 		PacketLoss:       lossPercent,
 		Jitter:           avgJitter,
@@ -906,15 +954,32 @@ func (nt *NetworkTester) sendAPIReport() {
 		log.Printf("Failed to send stats to API: %v", err)
 		return
 	}
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed to send stats to API: %d (%s)", resp.StatusCode, resp.Status)
+	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+}
+
+// finalizTest generates and logs the final report when a test completes
+func (nt *NetworkTester) finalizeTest() {
+	// wait 1 second to make sure all connections are closed so it is printed last
+	time.Sleep(1 * time.Second)
+	report := nt.GenerateFinalReport()
+	log.Printf("Test completed. Final Report:\n%s", report)
 }
 
 // Stop terminates the test immediately.
 func (nt *NetworkTester) Stop() {
 	nt.cancel()
 	nt.endTime = time.Now()
+
+	// Mark as no longer running (safe to do without lock since we're cancelling)
+	nt.controlMu.Lock()
+	nt.isRunning = false
+	nt.controlMu.Unlock()
+
 	if nt.apiTicker != nil {
 		nt.apiTicker.Stop()
 	}
@@ -927,9 +992,22 @@ func (nt *NetworkTester) Stop() {
 	}
 }
 
+// StopAndFinalize stops the test and generates the final report
+func (nt *NetworkTester) StopAndFinalize() {
+	nt.Stop()
+	nt.finalizeTest()
+}
+
 // Wait blocks until all test goroutines have completed.
 func (nt *NetworkTester) Wait() {
 	nt.wg.Wait()
+}
+
+// GetTestDone returns a channel that closes when the controlled test completes
+// (including test execution and final report generation).
+// This is useful for waiting for the entire test lifecycle to complete.
+func (nt *NetworkTester) GetTestDone() <-chan struct{} {
+	return nt.testDone
 }
 
 // GenerateFinalReport produces a comprehensive report of the test results.
@@ -945,8 +1023,8 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 	report += "                    FINAL REPORT\n"
 	report += strings.Repeat("=", 60) + "\n"
 	report += fmt.Sprintf("Test Duration: %v\n", testDuration.Round(time.Second))
-	report += fmt.Sprintf("Protocol: %s | Packet Size: %d bytes\n", nt.protocol, nt.packetSize)
-	report += fmt.Sprintf("Concurrency: %d connections per target\n\n", nt.concurrency)
+	report += fmt.Sprintf("Protocol: %s | Packet Size: %d bytes\n", nt.config.Protocol, nt.config.PacketSize)
+	report += fmt.Sprintf("Concurrency: %d connections per target, total %d \n\n", nt.config.Concurrency, nt.config.TotalConnections)
 
 	// Collect stats from all connections
 	type targetStats struct {
@@ -1023,7 +1101,7 @@ func (nt *NetworkTester) GenerateFinalReport() string {
 		if avgJitter > 20.0 {
 			anomalies = append(anomalies, fmt.Sprintf("HIGH JITTER: %s has %.2f ms jitter", ip, avgJitter))
 		}
-		if avgThroughput < 10.0 && nt.protocol == "tcp" {
+		if avgThroughput < 10.0 && nt.config.Protocol == "tcp" {
 			anomalies = append(anomalies, fmt.Sprintf("LOW THROUGHPUT: %s has only %.2f Mbps", ip, avgThroughput))
 		}
 	}
@@ -1053,7 +1131,7 @@ func (nt *NetworkTester) GetCurrentStats() TestResults {
 	defer nt.mu.RUnlock()
 
 	elapsed := time.Since(nt.startTime)
-	throughputMode := nt.pps <= 0
+	throughputMode := nt.config.PPS <= 0
 
 	// Build targets map
 	targetsMap := make(map[string]TargetMetrics)
@@ -1186,16 +1264,16 @@ func (nt *NetworkTester) GetCurrentStats() TestResults {
 
 	return TestResults{
 		Metadata: TestMetadata{
-			Protocol:       nt.protocol,
-			PacketSize:     nt.packetSize,
-			Concurrency:    nt.concurrency,
-			Port:           nt.port,
-			PPS:            nt.pps,
-			LocalIP:        nt.localIP,
-			TargetIPs:      nt.targetIPs,
+			Protocol:       nt.config.Protocol,
+			PacketSize:     nt.config.PacketSize,
+			Concurrency:    nt.config.Concurrency,
+			Port:           nt.config.Port,
+			PPS:            nt.config.PPS,
+			LocalIP:        nt.config.LocalIP,
+			TargetIPs:      strings.Split(nt.config.IPs, ","),
 			StartTime:      nt.startTime,
 			ElapsedMs:      int64(elapsed.Milliseconds()),
-			DurationMs:     int64(nt.duration.Milliseconds()),
+			DurationMs:     int64(nt.config.Duration.Milliseconds()),
 			ThroughputMode: throughputMode,
 			PacketMode:     !throughputMode,
 		},
@@ -1235,7 +1313,7 @@ func (nt *NetworkTester) GetFinalStats() TestResults {
 		if metrics.JitterMs > 20.0 && metrics.JitterMs > 0 {
 			anomalies = append(anomalies, fmt.Sprintf("HIGH JITTER: %s has %.2f ms jitter", ip, metrics.JitterMs))
 		}
-		if metrics.ThroughputMbps < 10.0 && nt.protocol == "tcp" {
+		if metrics.ThroughputMbps < 10.0 && nt.config.Protocol == "tcp" {
 			anomalies = append(anomalies, fmt.Sprintf("LOW THROUGHPUT: %s has only %.2f Mbps", ip, metrics.ThroughputMbps))
 		}
 	}
@@ -1256,4 +1334,49 @@ func (nt *NetworkTester) StopAPIServer() error {
 		return err
 	}
 	return nil
+}
+
+func detectLocalIP(ipList []string) string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil {
+				for _, targetIP := range ipList {
+					if ip.String() == targetIP {
+						return targetIP
+					}
+				}
+			}
+		}
+	}
+
+	// Try binding to each IP
+	for _, ip := range ipList {
+		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:0", ip))
+		if err != nil {
+			continue
+		}
+		conn, err := net.ListenUDP("udp", addr)
+		if err == nil {
+			_ = conn.Close()
+			return ip
+		}
+	}
+
+	return ""
 }
