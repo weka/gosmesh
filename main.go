@@ -21,6 +21,8 @@ func main() {
 		commands.RunCommand(args)
 	case "mesh":
 		commands.MeshCommand(args)
+	case "server":
+		commands.ServerCommand(args)
 	case "uninstall":
 		commands.UninstallCommand(args)
 	case "help", "-h", "--help":
@@ -41,6 +43,7 @@ Usage:
 Commands:
   run        Run network test directly (used by systemd)
   mesh       Deploy and orchestrate mesh testing across multiple nodes
+  server     Start control server that listens for test commands via HTTP
   uninstall  Remove gosmesh deployment from specified nodes
 
 Examples:
@@ -49,6 +52,9 @@ Examples:
 
   # Deploy mesh test from single controller
   gosmesh mesh --ips 10.0.0.1,10.0.0.2,10.0.0.3 --duration 5m
+
+  # Start control server
+  gosmesh server --port 8080
 
   # Clean up deployment
   gosmesh uninstall --ips 10.0.0.1,10.0.0.2,10.0.0.3
