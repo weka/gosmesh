@@ -643,8 +643,10 @@ func (c *Connection) tcpReceiverThroughput(ctx context.Context) {
 		batchSize = 100 // Default batch size
 	}
 
-	// Remove deadline for maximum throughput
-	c.conn.SetReadDeadline(time.Time{})
+	// Remove deadline for maximum throughput (check for nil first)
+	if c.conn != nil {
+		c.conn.SetReadDeadline(time.Time{})
+	}
 
 	for {
 		select {
@@ -656,6 +658,21 @@ func (c *Connection) tcpReceiverThroughput(ctx context.Context) {
 			}
 			return
 		default:
+			// Check if connection is still valid
+			if c.conn == nil {
+				log.Printf("Connection %d: Connection is nil in throughput receiver", c.ID)
+				// Attempt to reconnect
+				if reconnectErr := c.reconnectTCP(ctx); reconnectErr != nil {
+					log.Printf("Connection %d: Failed to reconnect in throughput receiver (conn was nil): %v", c.ID, reconnectErr)
+					return
+				}
+				// After reconnect, re-set the deadline
+				if c.conn != nil {
+					c.conn.SetReadDeadline(time.Time{})
+				}
+				continue
+			}
+
 			n, err := c.conn.Read(buffer)
 			if err != nil {
 				// Flush and continue on error
@@ -705,6 +722,17 @@ func (c *Connection) tcpReceiverPacket(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
+			// Check if connection is still valid
+			if c.conn == nil {
+				log.Printf("Connection %d: Connection is nil in packet receiver", c.ID)
+				// Attempt to reconnect
+				if reconnectErr := c.reconnectTCP(ctx); reconnectErr != nil {
+					log.Printf("Connection %d: Failed to reconnect in packet receiver (conn was nil): %v", c.ID, reconnectErr)
+					return
+				}
+				continue
+			}
+
 			c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 			n, err := c.conn.Read(buffer)
 			if err != nil {
