@@ -8,8 +8,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/weka/gosmesh/pkg/network"
@@ -113,6 +116,39 @@ type TestResults struct {
 	Message    string `json:"message,omitempty"`
 }
 
+// RunConfig defines a single test configuration
+type RunConfig struct {
+	LocalIP          string        `json:"local_ip"`
+	IPs              string        `json:"ips"`
+	Protocol         string        `json:"protocol"`
+	TotalConnections int           `json:"total_connections"`
+	Concurrency      int           `json:"concurrency"`
+	Duration         time.Duration `json:"duration"`
+	ReportInterval   time.Duration `json:"report_interval"`
+	PacketSize       int           `json:"packet_size"`
+	Port             int           `json:"port"`
+	PPS              int           `json:"pps"`
+	ThroughputMode   bool          `json:"throughput_mode"`
+	BufferSize       int           `json:"buffer_size"`
+	TCPNoDelay       bool          `json:"tcp_no_delay"`
+	UseOptimized     bool          `json:"use_optimized"`
+	EnableIOUring    bool          `json:"enable_io_uring"`
+	EnableHugePages  bool          `json:"enable_huge_pages"`
+	EnableOffload    bool          `json:"enable_offload"`
+	SendBatchSize    int           `json:"send_batch_size"`
+	RecvBatchSize    int           `json:"recv_batch_size"`
+	NumQueues        int           `json:"num_queues"`
+	BusyPollUsecs    int           `json:"busy_poll_usecs"`
+	TCPCork          bool          `json:"tcp_cork"`
+	TCPQuickAck      bool          `json:"tcp_quick_ack"`
+	MemArenaSize     int           `json:"mem_arena_size"`
+	RingSize         int           `json:"ring_size"`
+	NumWorkers       int           `json:"num_workers"`
+	CPUList          string        `json:"cpu_list"`
+	ReportTo         string        `json:"report_to"`
+	ApiServerPort    int           `json:"api_server_port"`
+}
+
 // NetworkTester orchestrates network performance testing across multiple targets.
 // It creates connections to all target IPs and measures performance metrics.
 //
@@ -157,6 +193,8 @@ type NetworkTester struct {
 	startTime time.Time
 	endTime   time.Time
 
+	networkServer *network.Server
+
 	// Optimization flags
 	UseOptimized    bool
 	EnableIOUring   bool
@@ -185,9 +223,15 @@ type NetworkTester struct {
 	// API Server
 	apiServer     *http.Server
 	apiServerPort int
+
+	// Server control state
+	isRunning     bool
+	currentConfig *RunConfig
+	lastError     string
+	controlMu     sync.RWMutex // For protecting control state
 }
 
-// ServerStats contains minimal statistics for a single server for aggregated reporting
+// ServerStats contains minimal statistics for a single networkServer for aggregated reporting
 type ServerStats struct {
 	IP               string           `json:"ip"`
 	Throughput       float64          `json:"throughput_gbps"`
@@ -210,7 +254,7 @@ type ServerStats struct {
 //   - packetSize: Size of test packets in bytes
 //   - port: Port to use for testing
 //   - pps: Packets per second per connection (0 = unlimited throughput mode)
-//   - apiServerPort: port number to listen for getStats requests. If 0, no API server will be initialized
+//   - apiServerPort: port number to listen for getStats requests. If 0, no API networkServer will be initialized
 //
 // Returns a new NetworkTester ready to be started.
 func NewNetworkTester(localIP string, ips []string, protocol string, concurrency int,
@@ -234,27 +278,357 @@ func NewNetworkTester(localIP string, ips []string, protocol string, concurrency
 	}
 }
 
+// Reconfigure updates the tester's configuration for the next test run.
+// This allows reusing the same NetworkTester instance for multiple tests without reinstantiation.
+// Must be called when no test is currently running (after Stop() and Wait() complete).
+func (nt *NetworkTester) Reconfigure(localIP string, targetIPs []string, protocol string,
+	concurrency int, duration, reportInterval time.Duration, packetSize, port, pps int) error {
+
+	nt.controlMu.Lock()
+	defer nt.controlMu.Unlock()
+	if nt.isRunning {
+		return fmt.Errorf("NetworkTester is already running, cannot reconfigure")
+	}
+
+	// Update configuration
+	nt.localIP = localIP
+	nt.targetIPs = targetIPs
+	nt.protocol = protocol
+	nt.concurrency = concurrency
+	nt.duration = duration
+	nt.reportInterval = reportInterval
+	nt.packetSize = packetSize
+	nt.port = port
+	nt.pps = pps
+
+	// Clear old connections
+	nt.mu.Lock()
+	nt.connections = nil
+	nt.mu.Unlock()
+
+	// Clear old networkServer reference
+	if nt.networkServer != nil {
+		nt.networkServer.Stop()
+	}
+	nt.networkServer = nil
+
+	// Create new context for the next run
+	nt.ctx, nt.cancel = context.WithCancel(context.Background())
+
+	// Reset timing
+	nt.startTime = time.Time{}
+	nt.endTime = time.Time{}
+
+	// Reset WaitGroup
+	nt.wg = sync.WaitGroup{}
+
+	log.Printf("NetworkTester reconfigured: IPs=%v, Protocol=%s, Concurrency=%d, Duration=%v",
+		targetIPs, protocol, concurrency, duration)
+
+	return nil
+}
+
+// StartHTTPServer starts a unified HTTP networkServer for both test control and results API.
+// Endpoints:
+//   - POST /api/start - Start a new test (control)
+//   - POST /api/stop - Stop running test (control)
+//   - GET /api/status - Get current test status (control)
+//   - GET /api/stats - Get current test statistics (API)
+//   - GET /api/stats/final - Get final test statistics with anomalies (API)
+//   - GET /health - Health check
+//
+// The networkServer listens on the specified port and handles both remote control commands
+// and results queries from the same unified interface.
+func (nt *NetworkTester) StartHTTPServer(port int) error {
+	if nt != nil && nt.apiServer != nil {
+		log.Printf("NetworkTester has already http networkServer on port %d", port)
+		return nil
+	}
+	mux := http.NewServeMux()
+
+	// Control endpoints
+	mux.HandleFunc("/api/start", nt.handleStart)
+	mux.HandleFunc("/api/stop", nt.handleStop)
+	mux.HandleFunc("/api/status", nt.handleStatus)
+
+	// API endpoints for stats
+	mux.HandleFunc("/api/stats", nt.handleStats)
+
+	// Final stats endpoint
+	mux.HandleFunc("/api/stats/final", nt.handleStatsFinal)
+
+	// Health check endpoint
+	mux.HandleFunc("/health", nt.handleHealth)
+
+	// Create HTTP networkServer
+	addr := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port))
+	nt.apiServer = &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	// Setup graceful shutdown handler
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Printf("\n⚠️  Received signal: %v - shutting down HTTP networkServer...", sig)
+
+		// Stop any running test
+		nt.controlMu.Lock()
+		if nt.isRunning {
+			log.Printf("Stopping running test...")
+			nt.Stop()
+		}
+		nt.controlMu.Unlock()
+
+		// Shutdown networkServer
+		_ = nt.apiServer.Close()
+	}()
+
+	// Start networkServer in background
+	nt.wg.Add(1)
+	go func() {
+		defer nt.wg.Done()
+		log.Printf("HTTP networkServer listening on http://%s", addr)
+		log.Printf("Control endpoints: POST /start, POST /stop, GET /status")
+		log.Printf("API endpoints: GET /api/stats, GET /api/stats/final, GET /health")
+		if err := nt.apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP networkServer error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+// StartWithConfig accepts a RunConfig and attempts to start the test.
+// If a test is already running, it returns an error.
+// The test runs asynchronously in the background.
+func (nt *NetworkTester) StartWithConfig(config *RunConfig) error {
+	nt.controlMu.Lock()
+	defer nt.controlMu.Unlock()
+
+	// Check if test already running
+	if nt.isRunning {
+		return fmt.Errorf("test is already running")
+	}
+
+	// Reconfigure the tester with the provided config
+	if err := nt.Reconfigure(
+		config.LocalIP,
+		strings.Split(config.IPs, ","),
+		config.Protocol,
+		config.Concurrency,
+		config.Duration,
+		config.ReportInterval,
+		config.PacketSize,
+		config.Port,
+		config.PPS,
+	); err != nil {
+		return fmt.Errorf("failed to reconfigure tester: %v", err)
+	}
+
+	// Apply optimization flags and performance tuning parameters
+	nt.UseOptimized = config.UseOptimized
+	nt.EnableIOUring = config.EnableIOUring
+	nt.EnableHugePages = config.EnableHugePages
+	nt.EnableOffload = config.EnableOffload
+	nt.BufferSize = config.BufferSize
+	nt.SendBatchSize = config.SendBatchSize
+	nt.RecvBatchSize = config.RecvBatchSize
+	nt.NumQueues = config.NumQueues
+	nt.BusyPollUsecs = config.BusyPollUsecs
+	nt.TCPCork = config.TCPCork
+	nt.TCPQuickAck = config.TCPQuickAck
+	nt.TCPNoDelay = config.TCPNoDelay
+	nt.MemArenaSize = config.MemArenaSize
+	nt.RingSize = config.RingSize
+	nt.NumWorkers = config.NumWorkers
+	nt.CPUList = config.CPUList
+
+	// Store config for status reporting
+	nt.currentConfig = config
+	nt.isRunning = true
+	nt.startTime = time.Now()
+	nt.lastError = ""
+
+	// Run test in background
+	go nt.runControlledTest()
+
+	return nil
+}
+
+// handleStart handles POST /start requests to start a new test
+func (nt *NetworkTester) handleStats(w http.ResponseWriter, r *http.Request) {
+	_ = r // Unused parameter
+	results := nt.GetCurrentStats()
+	jsonData, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		log.Printf("Failed to encode current stats: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(jsonData)
+}
+
+// handleStatsFinal handles GET /api/stats/final requests for final test results with anomalies
+func (nt *NetworkTester) handleStatsFinal(w http.ResponseWriter, r *http.Request) {
+	_ = r // Unused parameter
+	w.Header().Set("Content-Type", "application/json")
+	results := nt.GetFinalStats()
+	if err := json.NewEncoder(w).Encode(results); err != nil {
+		log.Printf("Failed to encode final stats: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// handleHealth handles GET /health requests for health check
+func (nt *NetworkTester) handleHealth(w http.ResponseWriter, r *http.Request) {
+	_ = r // Unused parameter
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{"status":"ok","message":"HTTP networkServer is running"}`)
+}
+
+// handleStart handles POST /start requests to start a new test
+func (nt *NetworkTester) handleStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var config RunConfig
+	// Parse configuration from request body
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Use the new StartWithConfig function
+	if err := nt.StartWithConfig(&config); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status": "Test started",
+	})
+}
+
+// handleStop handles POST /stop requests to stop the running test
+func (nt *NetworkTester) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	nt.controlMu.Lock()
+	if !nt.isRunning {
+		nt.controlMu.Unlock()
+		http.Error(w, "No test is currently running", http.StatusBadRequest)
+		return
+	}
+	nt.controlMu.Unlock()
+
+	log.Printf("Stopping test via control networkServer...")
+	nt.Stop()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status": "Test stopped",
+	})
+}
+
+// handleStatus handles GET /status requests for test status
+func (nt *NetworkTester) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	nt.controlMu.RLock()
+	defer nt.controlMu.RUnlock()
+
+	status := map[string]interface{}{
+		"running": nt.isRunning,
+	}
+
+	if nt.isRunning {
+		status["uptime_seconds"] = time.Since(nt.startTime).Seconds()
+		if nt.currentConfig != nil {
+			status["config"] = nt.currentConfig
+		}
+	}
+
+	if nt.lastError != "" {
+		status["last_error"] = nt.lastError
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(status)
+}
+
+// runControlledTest executes a test controlled via HTTP API
+func (nt *NetworkTester) runControlledTest() {
+	defer func() {
+		nt.controlMu.Lock()
+		nt.isRunning = false
+		nt.controlMu.Unlock()
+		log.Printf("Controlled test completed")
+	}()
+
+	// Start test
+	if err := nt.Start(); err != nil {
+		nt.controlMu.Lock()
+		nt.lastError = fmt.Sprintf("Failed to start test: %v", err)
+		nt.controlMu.Unlock()
+		log.Printf("Error: Failed to start test: %v", err)
+		return
+	}
+
+	log.Printf("Controlled test started, waiting for completion...")
+
+	// Wait for test completion
+	nt.Wait()
+
+	// Generate final report
+	report := nt.GenerateFinalReport()
+	log.Printf("Controlled test completed. Report:\n%s", report)
+}
+
 // Start begins the network testing.
-// It starts the echo server, creates connections to all targets, and starts periodic reporting.
+// It starts the echo networkServer, creates connections to all targets, and starts periodic reporting.
 // This is non-blocking; call Wait() to wait for completion or Stop() to end the test early.
 func (nt *NetworkTester) Start() error {
 	nt.startTime = time.Now()
 
 	if nt.apiServerPort > 0 {
-		if err := nt.StartAPIServer(); err != nil {
-			log.Printf("Failed to start API server: %v\n", err)
+		if err := nt.StartHTTPServer(nt.apiServerPort); err != nil {
+			log.Printf("Failed to start API networkServer: %v\n", err)
 		}
 	}
-	// Start server
-	server := network.NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
-	if err := server.Start(); err != nil {
-		return fmt.Errorf("failed to start server: %v", err)
+	// Start networkServer
+	nt.networkServer = network.NewServer(nt.localIP, nt.port, nt.protocol, nt.packetSize)
+	if err := nt.networkServer.Start(); err != nil {
+		return fmt.Errorf("failed to start networkServer: %v", err)
 	}
 
 	nt.wg.Add(1)
 	go func() {
 		defer nt.wg.Done()
-		server.Run(nt.ctx)
+		nt.networkServer.Run(nt.ctx)
 	}()
 
 	// Give servers time to start on all nodes
@@ -271,8 +645,8 @@ func (nt *NetworkTester) Start() error {
 		// Startup wait completed normally
 	case <-nt.ctx.Done():
 		// Context cancelled (e.g., signal received)
-		log.Printf("Interrupted during server startup wait")
-		return fmt.Errorf("interrupted during server startup wait")
+		log.Printf("Interrupted during networkServer startup wait")
+		return fmt.Errorf("interrupted during networkServer startup wait")
 	}
 
 	// Create connections to all targets (excluding self)
@@ -532,7 +906,9 @@ func (nt *NetworkTester) sendAPIReport() {
 		log.Printf("Failed to send stats to API: %v", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 }
 
 // Stop terminates the test immediately.
@@ -541,6 +917,13 @@ func (nt *NetworkTester) Stop() {
 	nt.endTime = time.Now()
 	if nt.apiTicker != nil {
 		nt.apiTicker.Stop()
+	}
+	if nt.networkServer != nil {
+		log.Printf("Stopping network networkServer...")
+		nt.networkServer.Stop()
+		nt.mu.Lock()
+		nt.networkServer = nil
+		nt.mu.Unlock()
 	}
 }
 
@@ -861,71 +1244,7 @@ func (nt *NetworkTester) GetFinalStats() TestResults {
 	return results
 }
 
-// StartAPIServer starts an HTTP API server that serves test results.
-// The server listens on localhost:port and provides endpoints:
-//   - GET /api/stats - Returns current test statistics as JSON
-//   - GET /api/stats/final - Returns final test statistics with anomalies as JSON
-//
-// Returns the port the server is listening on or an error if startup failed.
-func (nt *NetworkTester) StartAPIServer() error {
-
-	// Create router/mux
-	mux := http.NewServeMux()
-
-	// Endpoint for current stats
-	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
-		results := nt.GetCurrentStats()
-		jsonData, err := json.MarshalIndent(results, "", "  ")
-		if err != nil {
-			log.Printf("Failed to encode current stats: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(jsonData)
-	})
-
-	// Endpoint for final stats
-	mux.HandleFunc("/api/stats/final", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		results := nt.GetFinalStats()
-		if err := json.NewEncoder(w).Encode(results); err != nil {
-			log.Printf("Failed to encode final stats: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-		}
-	})
-
-	// Health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ok","message":"API server is running"}`)
-	})
-
-	// Create server
-	// Bind to all interfaces (0.0.0.0) instead of just localhost
-	// This allows connections from any network interface
-	addr := net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", nt.apiServerPort))
-	nt.apiServer = &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
-
-	// Start server in background
-	nt.wg.Add(1)
-	go func() {
-		defer nt.wg.Done()
-		log.Printf("Starting API server on http://%s", addr)
-		if err := nt.apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("API server error: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-// StopAPIServer gracefully shuts down the API server.
+// StopAPIServer gracefully shuts down the HTTP networkServer.
 func (nt *NetworkTester) StopAPIServer() error {
 	if nt.apiServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -17,39 +17,8 @@ import (
 	"github.com/weka/gosmesh/pkg/testing"
 )
 
-type RunConfig struct {
-	IPs              string
-	Protocol         string
-	TotalConnections int
-	Concurrency      int
-	Duration         time.Duration
-	ReportInterval   time.Duration
-	PacketSize       int
-	Port             int
-	PPS              int
-	ThroughputMode   bool
-	BufferSize       int
-	TCPNoDelay       bool
-	UseOptimized     bool
-	EnableIOUring    bool
-	EnableHugePages  bool
-	EnableOffload    bool
-	SendBatchSize    int
-	RecvBatchSize    int
-	NumQueues        int
-	BusyPollUsecs    int
-	TCPCork          bool
-	TCPQuickAck      bool
-	MemArenaSize     int
-	RingSize         int
-	NumWorkers       int
-	CPUList          string
-	ReportTo         string // API endpoint to report stats to
-	ApiServerPort    int
-}
-
 func RunCommand(args []string) {
-	config := &RunConfig{}
+	config := &testing.RunConfig{}
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	fs.StringVar(&config.IPs, "ips", "", "Comma-separated list of IPs for full mesh testing")
@@ -94,7 +63,7 @@ func RunCommand(args []string) {
 	runWithConfig(config)
 }
 
-func runWithConfig(config *RunConfig) {
+func runWithConfig(config *testing.RunConfig) {
 	// Runtime optimizations
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	debug.SetGCPercent(200)
