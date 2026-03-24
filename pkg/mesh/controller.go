@@ -568,7 +568,7 @@ func (mc *Controller) startTestViaHTTP(target Target) error {
 	ip := target.IP
 	port := mc.config.TestConfig.ApiServerPort
 	if port == 0 {
-		port = 8080 // Default API server port
+		port = 44444 // Default API server port (must differ from controller API port)
 	}
 
 	// Start with defaults and apply mesh-specific overrides
@@ -613,7 +613,7 @@ func (mc *Controller) stopTestViaHTTP(target Target) error {
 	ip := target.IP
 	port := mc.config.TestConfig.ApiServerPort
 	if port == 0 {
-		port = 8080 // Default API server port
+		port = 44444 // Default API server port (must differ from controller API port)
 	}
 
 	url := fmt.Sprintf("http://%s:%d/api/stop", ip, port)
@@ -741,7 +741,7 @@ func (mc *Controller) startServiceNoDeployment(target Target) error {
 func (mc *Controller) generateSystemdUnit(binaryPath string) string {
 	apiPort := mc.config.TestConfig.ApiServerPort
 	if apiPort == 0 {
-		apiPort = 8080
+		apiPort = 44444
 	}
 
 	// Start gosmesh in server mode - it will listen for HTTP commands to start tests
@@ -781,7 +781,7 @@ func (mc *Controller) checkAgentHealth(target Target) (bool, error) {
 	ip := target.IP
 	apiPort := mc.config.TestConfig.ApiServerPort
 	if apiPort == 0 {
-		apiPort = 8080
+		apiPort = 44444
 	}
 
 	healthURL := fmt.Sprintf("http://%s:%d/health", ip, apiPort)
