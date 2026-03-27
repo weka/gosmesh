@@ -768,7 +768,8 @@ func (mc *Controller) handleGetStats(w http.ResponseWriter, _ *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		errorJSON := fmt.Sprintf(`{"error": "%s"}`, err.Error())
+		errorResp := map[string]string{"error": err.Error()}
+		errorJSON, _ := json.Marshal(errorResp)
 		_, _ = w.Write([]byte(errorJSON))
 		return
 	}
