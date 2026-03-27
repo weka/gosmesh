@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"time"
 )
 
@@ -754,79 +753,34 @@ func (mc *Controller) displayStats() {
 	fmt.Printf("=======================\n")
 }
 
-// sortJSONKeys takes JSON bytes and returns a formatted JSON string with sorted keys
-// This ensures consistent, readable JSON output regardless of map ordering
-func sortJSONKeys(jsonData []byte) (string, error) {
-	var data map[string]interface{}
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		return "", err
-	}
-
-	// Get sorted keys
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	// Build sorted JSON manually
-	var result string
-	result = "{\n"
-	for i, k := range keys {
-		// Marshal the key and value
-		keyJSON, _ := json.Marshal(k)
-		valJSON, _ := json.Marshal(data[k])
-
-		result += fmt.Sprintf("  %s: %s", string(keyJSON), string(valJSON))
-		if i < len(keys)-1 {
-			result += ","
-		}
-		result += "\n"
-	}
-	result += "}"
-
-	return result, nil
-}
-
 // handleGetStats creates a JSON representation of all stats from GetStats() and reports it.
 func (mc *Controller) handleGetStats(w http.ResponseWriter, _ *http.Request) {
 	// Get current stats
 	stats := mc.GetStats()
 
-	// Marshal to JSON
+	w.Header().Set("Content-Type", "application/json")
+
+	// Marshal to JSON with indentation for readability
 	jsonData, err := json.MarshalIndent(stats, "", "  ")
 	if err != nil {
-		if w != nil {
-			http.Error(w, fmt.Sprintf("Failed to marshal stats: %v", err), http.StatusInternalServerError)
-		}
 		if mc.config.Verbose {
 			log.Printf("Failed to marshal stats: %v", err)
 		}
-		return
-	}
-
-	// Sort JSON keys for consistent output
-	sortedJSON, err := sortJSONKeys(jsonData)
-	if err != nil {
-		if w != nil {
-			http.Error(w, fmt.Sprintf("Failed to sort JSON: %v", err), http.StatusInternalServerError)
-		}
-		if mc.config.Verbose {
-			log.Printf("Failed to sort JSON: %v", err)
-		}
-		return
-	}
-
-	// If this is being used as HTTP handler
-	if w != nil {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(sortedJSON)))
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(sortedJSON))
+		w.WriteHeader(http.StatusInternalServerError)
+		errorResp := map[string]string{"error": err.Error()}
+		errorJSON, _ := json.Marshal(errorResp)
+		_, _ = w.Write([]byte(errorJSON))
+		return
+	}
 
-		if mc.config.Verbose {
-			log.Printf("[API] Sorted stats reported: %d bytes", len(sortedJSON))
-		}
+	// Write response
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jsonData)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(jsonData)
+
+	if mc.config.Verbose {
+		log.Printf("[API] Stats reported: %d bytes", len(jsonData))
 	}
 }
 
@@ -855,46 +809,4 @@ func (mc *Controller) ReportAllStats() error {
 
 	fmt.Println(string(jsonData))
 	return nil
-}
-
-// statsHTTPHandler handles incoming stats reports from nodes
-func (mc *Controller) statsHTTPHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	var stats map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&stats); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// Extract IP from stats
-	ip, ok := stats["ip"].(string)
-	if !ok {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// Extract metrics
-	throughput, _ := stats["throughput_gbps"].(float64)
-	packetLoss, _ := stats["packet_loss_percent"].(float64)
-	jitter, _ := stats["jitter_ms"].(float64)
-	rtt, _ := stats["rtt_ms"].(float64)
-	reconnectCount, _ := stats["reconnect_count"].(float64)
-
-	targetReconnects := make(map[string]int64)
-	if tr, ok := stats["target_reconnects"].(map[string]interface{}); ok {
-		for k, v := range tr {
-			if val, ok := v.(float64); ok {
-				targetReconnects[k] = int64(val)
-			}
-		}
-	}
-
-	// Update stats
-	mc.updateStats(ip, throughput, packetLoss, jitter, rtt, int64(reconnectCount), targetReconnects)
-
-	w.WriteHeader(http.StatusOK)
 }
